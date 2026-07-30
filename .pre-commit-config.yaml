@@ -1,0 +1,19 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [pydantic, PySide6, httpx, ruamel.yaml, keyring]
+        args: [--ignore-missing-imports]
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.398
+    hooks:
+      - id: pyright
