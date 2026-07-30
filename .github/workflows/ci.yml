@@ -1,0 +1,35 @@
+name: CI
+
+# Pull-request gate (gates + build run as reusable workflows). The
+# push-to-main pipeline (gates + build + Edge release) lives in auto_build.yml
+# so a push does not double-build. This workflow validates pull requests.
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  lint:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lint.yml
+
+  pyright:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pyright.yml
+
+  pytest:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pytest.yml
+
+  build:
+    needs: [lint, pyright, pytest]
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/build.yml
+    with:
+      attest: false

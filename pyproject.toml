@@ -1,0 +1,82 @@
+[project]
+name = "llamagui"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+  "pydantic>=2.0",
+  "pyside6>=6.7",
+  "ruamel-yaml>=0.18",
+  "httpx>=0.27",
+  "keyring>=25",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-qt>=4",
+  "pytest-mock>=3",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "pyright>=1.1",
+  "ordered-set",
+  "zstandard",
+]
+
+# Build-time only: keeps the Nuitka standalone bundle lean by excluding test
+# and type-checker deps (mypy/pyright/pytest) from the frozen binary.
+build = [
+  "nuitka>=2.0",
+]
+
+[project.scripts]
+llamagui = "llamagui.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+environments = [
+  "sys_platform == 'darwin'",
+  "sys_platform == 'linux'",
+  "sys_platform == 'win32'",
+]
+
+[tool.ruff]
+# Defaults to Black like
+line-length = 88
+indent-width = 4
+lint.extend-select = ["I"]
+exclude = ['venv', '.venv', 'build', '**/node_modules', '**/__pycache__', '**/.*']
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+pretty = true
+exclude = ['venv', '.venv', 'build']
+
+[tool.pyright]
+# Type checking mode: basic, standard or strict
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = true
+exclude = ['venv', '.venv', 'build', '**/node_modules', '**/__pycache__', '**/.*']
+reportMissingTypeStubs = "warning"
+reportUnknownMemberType = false
+# White-box tests intentionally inspect private members (_cards, _pages, etc.)
+# and Qt's allWidgets() is not fully typed; these are by design, not bugs.
+reportPrivateUsage = "none"
+# Pytest fixtures named `_reset_*` are intentionally private (autouse);
+# Qt's QApplication.allWidgets() returns QWidget which lacks dynamic attrs.
+reportUnusedFunction = "none"
+reportAttributeAccessIssue = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+markers = [
+  "integration: needs network or external binaries (skipped by default)",
+]
+addopts = "-q"
