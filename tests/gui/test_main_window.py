@@ -92,3 +92,19 @@ def test_engine_worker_runs(qtbot: QtBot, fake_orch: MagicMock) -> None:
     worker.signals.finished.connect(_ignore)
     worker.run()
     assert fake_orch.describe.called
+
+
+def test_close_stops_router_and_tears_down(qtbot: QtBot, fake_orch: MagicMock) -> None:
+    """Closing the window must terminate the app, not hide it (regression).
+
+    Previously the tray path called ``event.ignore()`` and only hid the window,
+    so the process lingered forever and Quit did nothing.
+    """
+    from unittest.mock import patch
+
+    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+        w = MainWindow()
+        qtbot.addWidget(w)
+        accepted = w.close()
+    assert accepted is True
+    assert fake_orch.stop.called

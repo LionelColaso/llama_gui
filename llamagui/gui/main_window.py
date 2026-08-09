@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from ..config import AppConfig
 from ..orchestrator import Orchestrator
+from .dialogs.first_run import FirstRunDialog
 from .pages.actions import ActionsPage
 from .pages.dashboard import DashboardPage
 from .pages.logs import LogsPage
@@ -28,7 +29,7 @@ class MainWindow(QWidget):
     def __init__(self, cfg: AppConfig | None = None) -> None:
         super().__init__()
         self.setWindowTitle("llama-gui")
-        self.resize(900, 600)
+        self.resize(960, 640)
         self._cfg = cfg or AppConfig.load()
         self._orch = Orchestrator(self._cfg)
 
@@ -47,20 +48,20 @@ class MainWindow(QWidget):
         self._actions = ActionsPage(self._orch)
         self._resolver = ResolverPage(self._orch)
 
-        root_path = Path(self._cfg.root)
-        state = root_path / "state"
-        cfg_path = root_path / "config.yaml"
-
-        self._models = ModelsPage(self._orch, cfg_path)
-        self._logs = LogsPage(state)
+        root_path = self._orch.cfg.root_path
+        self._models = ModelsPage(self._orch, root_path / "config.yaml")
+        self._logs = LogsPage(root_path / "state")
         self._settings = SettingsPage(self._orch)
 
-        self._pages.addWidget(self._dashboard)
-        self._pages.addWidget(self._actions)
-        self._pages.addWidget(self._resolver)
-        self._pages.addWidget(self._models)
-        self._pages.addWidget(self._logs)
-        self._pages.addWidget(self._settings)
+        for page in (
+            self._dashboard,
+            self._actions,
+            self._resolver,
+            self._models,
+            self._logs,
+            self._settings,
+        ):
+            self._pages.addWidget(page)
         layout.addWidget(self._pages)
 
         self._nav.setCurrentRow(0)
@@ -74,23 +75,7 @@ class MainWindow(QWidget):
             interval_ms = self._cfg.auto_update_interval_hours * 3600 * 1000
             self._update_timer.start(interval_ms)
 
-        # Keep a persistent tray icon so notifications don't get GC'd, and to
-        # allow restoring / quitting the app when minimized to the tray.
-        self._tray: QSystemTrayIcon | None = None
-        if QSystemTrayIcon.isSystemTrayAvailable():
-            self._tray = QSystemTrayIcon(self)
-            self._tray.setIcon(QIcon.fromTheme("application-x-executable"))
-            self._tray.setToolTip("llama-gui")
-            tray_menu = QMenu(self)
-            show_action = QAction("Show", self)
-            show_action.triggered.connect(self.showNormal)
-            quit_action = QAction("Quit", self)
-            quit_action.triggered.connect(self.close)
-            tray_menu.addAction(show_action)
-            tray_menu.addAction(quit_action)
-            self._tray.setContextMenu(tray_menu)
-            self._tray.activated.connect(self._on_tray_activated)
-            self._tray.show()
+        self._tray = self._build_tray()
 
         # "Launch router on start": fire-and-forget launch in the background.
         if self._cfg.launch_on_start:
@@ -103,6 +88,42 @@ class MainWindow(QWidget):
             self.hide()
         else:
             self.show()
+
+        # Offer first-run setup once nothing can be resolved.
+        QTimer.singleShot(0, self._maybe_first_run)
+
+    def _build_tray(self) -> QSystemTrayIcon | None:
+        """Keep a persistent tray icon (also stops notifications being GC'd)."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return None
+        tray = QSystemTrayIcon(self)
+        tray.setIcon(QIcon.fromTheme("application-x-executable"))
+        tray.setToolTip("llama-gui")
+        menu = QMenu(self)
+        show_action = QAction("Show", self)
+        show_action.triggered.connect(self.showNormal)
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.close)
+        menu.addAction(show_action)
+        menu.addAction(quit_action)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        return tray
+
+    def _maybe_first_run(self) -> None:
+        """Show the setup dialog when the app has nothing to run yet."""
+        if getattr(self._orch.cfg, "first_run_complete", False):
+            return
+        try:
+            status: Any = self._orch.status()
+            ready = bool(getattr(status, "ready", False))
+        except Exception:  # noqa: BLE001 - never block startup on a status error
+            return
+        if ready:
+            return
+        FirstRunDialog(self._orch, self).exec()
+        self._dashboard.start_refresh()
 
     def _switch_page(self, index: int) -> None:
         self._dashboard.stop_refresh()
@@ -146,12 +167,21 @@ class MainWindow(QWidget):
                 self.raise_()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # When a system tray is available, keep running in the tray so the
-        # router keeps serving and the app is still reachable from the tray.
-        if self._tray is not None:
-            event.ignore()
-            self.hide()
-            return
-        self._dashboard.stop_refresh()
-        self._update_timer.stop()
+        # Fully tear down so the process actually exits. Closing the window or
+        # choosing Quit from the tray must terminate the app; an earlier version
+        # called event.ignore() while a tray existed and only hid the window,
+        # leaving the process alive forever.
+        try:
+            self._dashboard.stop_refresh()
+        except Exception:  # noqa: BLE001, S110 - best-effort during shutdown
+            pass
+        try:
+            self._update_timer.stop()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        # Stop any running router so we don't leave an orphaned server/port.
+        try:
+            self._orch.stop()
+        except Exception:  # noqa: BLE001, S110 - never block shutdown on a stop error
+            pass
         super().closeEvent(event)

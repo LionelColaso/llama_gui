@@ -1,0 +1,113 @@
+name: CI
+
+# Cross-platform build + check + test matrix. The app must build and pass on
+# Windows, Linux and macOS (project requirement #6), so every job runs the
+# same gate: lint, types, and the non-integration test suite.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: ${{ matrix.os }} / py3.12
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Mypy
+        run: uv run mypy .
+
+      - name: Pyright
+        run: uv run pyright -p pyproject.toml .
+
+      - name: Tests (unit + gui, no integration)
+        run: uv run pytest -m "not integration" -q
+
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: check
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ matrix.os }}-nuitka
+          max-size: 1.0G
+
+      - name: Sync dependencies (build group, no dev)
+        run: uv sync --locked --no-dev --group build
+
+      - name: Build standalone executable (Nuitka)
+        run: uv run python scripts/build.py --product-version "0.0.0.0"
+        env:
+          CCACHE_MAXSIZE: "1.0G"
+
+      - name: Launch smoke test (built executable runs)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export QT_QPA_PLATFORM=offscreen
+          fi
+          EXE=$(python - <<'PY'
+          import platform, pathlib
+          out = pathlib.Path("build")
+          if platform.system() == "Windows":
+              p = out / "llamagui.dist" / "llama-gui.exe"
+          elif platform.system() == "Darwin":
+              b = out / "llama-gui.app"
+              p = b / "Contents" / "MacOS" / "llama-gui" if b.is_dir() else out / "llamagui.dist" / "llama-gui"
+          else:
+              p = out / "llamagui.dist" / "llama-gui"
+          print(p)
+          PY
+          )
+          timeout 30 "$EXE" describe --json
+
+      - name: Generate build attestation
+        uses: actions/attest-build-provenance@v4
+        if: ${{ success() }}
+        with:
+          subject-path: |
+            build/llama-gui*
+            build/llama-gui.app/**
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-gui-${{ matrix.os }}
+          path: build/llama-gui*
+          if-no-files-found: warn

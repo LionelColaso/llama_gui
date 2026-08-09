@@ -9,7 +9,9 @@ A PySide6 desktop app for orchestrating [`llama-server`](https://github.com/ggml
   - **managed-prebuilt** — download official GitHub release builds into a managed dir (no compiler needed)
   - **managed-build** — build from the `vendor/` submodules with the local toolchain
   - **system** — binaries found on `PATH`
-- **Backends:** `vulkan` (default), `cuda13`, `cuda12` (data-driven — see `orchestrator.backend_names()`).
+- **Backends:** `vulkan` (default), `cuda13`, `cuda12`, `cpu`, `metal` (data-driven — see `models.BACKENDS`). One catalogue drives Windows, Linux **and** macOS.
+- **Auto-install / first run:** a first-run dialog appears when nothing resolves yet, offering download, point-at, or build. `bootstrap` downloads what is missing and activates it.
+- **Durable settings:** paths, chosen backend, install-source and CUDA-runtime mode live in a platform-native config dir (`%APPDATA%/llamagui`, `~/.config/llamagui`, `~/Library/Preferences/llamagui`) and survive restarts; a corrupt file is backed up, not overwritten. The GitHub token is kept only in the OS keyring.
 - **GUI:** Dashboard, Actions, Resolver, Models, Logs, Settings; system-tray with minimize-to-tray.
 - **CLI:** typed envelope + exit codes for scripting and tests (`--json`).
 
@@ -35,7 +37,15 @@ uv run python -m llamagui launch         # start llama-swap
 uv run python -m llamagui stop
 ```
 
-Other CLI actions: `resolve`, `update`, `use`, `restart`, `build`, `list-assets`.
+Other CLI actions: `resolve`, `update`, `use`, `restart`, `build`, `list-assets`, `bootstrap`, `config`.
+
+### Install sources
+
+`install` / `update` / `bootstrap` prefer official prebuilt releases by default. If you
+pass `--source build` (or set *Install source* to `build` in Settings), the app builds
+from the vendored `llama.cpp` source instead — and if a build is impossible (no toolchain),
+it reports `Toolchain not found` rather than silently downloading. CUDA backends bundle
+their runtime per the *CUDA runtime* setting (`auto` / `always` / `never`).
 
 ## Build
 
@@ -45,6 +55,19 @@ A standalone executable is produced with [Nuitka](https://nuitka.net/):
 just build                 # runs checks, then builds into build/llamagui.dist/
 just build-version 0.1.0.0 # set a product version
 ```
+
+Building from source uses the git submodules (`vendor/llama.cpp`, `vendor/llama-swap`):
+
+```bash
+just build-source                       # git submodule update, build backends + llama-swap + GUI
+just build-llama-cpp cuda12             # only the CUDA 12 backend (skips the GUI build)
+just build-llama-swap                   # only llama-swap (skips the GUI build)
+uv run python scripts/build.py --build-llama-cpp --config Release --cuda-arch 75
+```
+
+`build.py` checks out the submodules for you (`git submodule update --init --recursive`)
+unless you pass `--skip-submodules`. Compiled binaries land in the app's managed
+directory (`<root>/managed/<backend>`), so the GUI can use them immediately.
 
 ## Checks
 

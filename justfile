@@ -19,19 +19,23 @@ run:
 
 # Run all tests (unit + gui, skip integration)
 test:
-    uv run pytest tests/unit tests/gui -q
+    uv run pytest -m "not integration" -q
 
 # Run tests with verbose output and short tracebacks
 test-verbose:
-    uv run pytest tests/unit tests/gui -v --tb=short
+    uv run pytest -m "not integration" -v --tb=short
+
+# Run every test including the (network/root-requiring) integration suite
+test-all:
+    uv run pytest -v
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Code Quality
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Run the full check suite: ruff format --check, ruff check, mypy, pyright,
-# jscpd, pytest (order per Agent.md §12.3). Each recipe is individually runnable.
-check: ruff-format-check ruffcheck typecheck jscpd test-verbose
+# jscpd, actionlint, pytest (order per Agent.md §12.3). Each recipe is individually runnable.
+check: ruff-format-check ruffcheck typecheck jscpd actionlint test-verbose
 
 # Verify formatting without modifying files (ruff format --check)
 ruff-format-check:
@@ -59,6 +63,11 @@ format:
 jscpd:
     where npx >nul 2>nul && (npx --yes jscpd@latest . --config .jscpd.json) || (echo jscpd skipped: npx not found)
 
+# Lint GitHub Actions workflow YAML locally (catches bad action refs, permission
+# scoping, typos before they fail in CI). Skip gracefully if not installed.
+actionlint:
+    where actionlint >nul 2>nul && (actionlint) || (echo actionlint skipped: not installed)
+
 # check with mypy
 mypy:
     uv run mypy {{config_and_path}}
@@ -78,6 +87,19 @@ build *ARGS='': check
 # Build llama-gui executable with a specific version string
 build-version VERSION: check
     uv run python scripts/build.py --product-version "{{VERSION}}"
+
+# Build the vendored llama.cpp backends from source (git submodule).
+# Pass backend names to restrict, e.g. `just build-llama-cpp cuda12`.
+build-llama-cpp *BACKENDS='':
+    uv run python scripts/build.py --build-llama-cpp {{BACKENDS}} --skip-gui-build
+
+# Build the vendored llama-swap from source (git submodule).
+build-llama-swap:
+    uv run python scripts/build.py --build-llama-swap --skip-gui-build
+
+# Build everything from source: vendor submodules, then the GUI executable.
+build-source:
+    uv run python scripts/build.py --build-llama-cpp --build-llama-swap
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Dependency Management

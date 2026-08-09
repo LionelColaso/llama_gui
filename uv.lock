@@ -297,9 +297,11 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+build = [
+    { name = "nuitka" },
+]
 dev = [
     { name = "mypy" },
-    { name = "nuitka" },
     { name = "ordered-set" },
     { name = "pyright" },
     { name = "pytest" },
@@ -319,9 +321,9 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+build = [{ name = "nuitka", specifier = ">=2.0" }]
 dev = [
     { name = "mypy", specifier = ">=1.11" },
-    { name = "nuitka", specifier = ">=2.0" },
     { name = "ordered-set" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8" },

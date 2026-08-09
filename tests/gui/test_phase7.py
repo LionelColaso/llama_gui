@@ -111,4 +111,30 @@ class TestSettingsPage:
     def test_creates(self, qtbot: QtBot, fake_orch: MagicMock) -> None:
         page = SettingsPage(fake_orch)
         qtbot.addWidget(page)
-        assert page._root_edit is not None
+        assert page._root_picker is not None
+
+    def test_collect_round_trips_pointed_paths(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        page = SettingsPage(fake_orch)
+        qtbot.addWidget(page)
+        page._pointed_server.setText("/opt/llama/llama-server")
+        page._pointed_swap.setText("/opt/llama/llama-swap")
+
+        collected = page.collect()
+        assert collected["pointed"]["llama_server"] == "/opt/llama/llama-server"
+        assert collected["pointed"]["llama_swap"] == "/opt/llama/llama-swap"
+
+    def test_save_persists_through_the_orchestrator(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        page = SettingsPage(fake_orch)
+        qtbot.addWidget(page)
+        page._port_spin.setValue(9099)
+        page._save()
+
+        saved = fake_orch.save_config.call_args.args[0]
+        assert saved["port"] == 9099
+        # Unrelated settings travel with the save so nothing is dropped.
+        assert "pointed" in saved
+        assert "source_priority" in saved

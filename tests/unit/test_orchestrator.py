@@ -18,9 +18,21 @@ def test_describe(tmp_path: Path) -> None:
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)
     d = orch.describe()
-    assert len(d.backends) == 3
-    assert d.backends[0].name == "vulkan"
+    names = [b.name for b in d.backends]
+    # The catalogue is data-driven and platform-aware: every backend is listed
+    # with its availability, so the GUI never hardcodes the list.
+    assert names[:3] == ["vulkan", "cuda13", "cuda12"]
+    assert {"cpu", "metal"} <= set(names)
     assert "describe" in d.available_actions
+    assert d.platform.system in ("win32", "linux", "darwin")
+
+
+def test_describe_marks_unavailable_backends(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    by_name = {b.name: b for b in orch.describe().backends}
+    unusable = "metal" if _SYSTEM != "darwin" else "cuda12"
+    assert by_name[unusable].prebuilt_available is False
+    assert by_name[unusable].unavailable_reason
 
 
 def test_describe_defaults(tmp_path: Path) -> None:
@@ -152,3 +164,57 @@ def test_install_with_fake_root(tmp_path: Path) -> None:
 
 def test_force_update_fails_without_network(tmp_path: Path) -> None:
     _assert_install_fails_no_asset(tmp_path, "update", force=True)
+
+
+def test_use_without_auto_install_raises(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with pytest.raises(Exception, match="not installed"):
+        orch.use("vulkan")
+
+
+def test_use_with_auto_install_obtains_backend(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    backend = "vulkan"
+    target = tmp_path / "managed" / backend
+    obtained: list[str] = []
+
+    def fake_obtain(
+        self: object, name: str, force: bool = False, source: str | None = None
+    ) -> object:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / f"llama-server{_EXE_SUFFIX}").write_text("", encoding="utf-8")
+        obtained.append(name)
+        return None
+
+    with patch.object(Orchestrator, "_obtain_backend", fake_obtain):
+        result = orch.use(backend, auto_install=True)
+
+    assert result.auto_installed is True
+    assert obtained == ["vulkan"]
+    assert (tmp_path / "state" / "active.txt").read_text(
+        encoding="utf-8"
+    ).strip() == "vulkan"
+
+
+def test_install_source_resolves_from_config_and_override(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path), install_source="build"))
+    assert orch._install_source(None) == "build"
+    assert orch._install_source("prebuilt") == "prebuilt"
+
+
+def test_install_build_without_toolchain_falls_back_to_prebuilt(tmp_path: Path) -> None:
+    """No toolchain -> build is skipped -> prebuilt asset lookup still runs."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with (
+        patch(
+            "llamagui.backends.prebuilt.latest_release", return_value=_empty_release()
+        ),
+        pytest.raises(Exception, match="No asset matching"),
+    ):
+        orch.install(["vulkan"], source="build")
+
+
+def test_try_build_without_toolchain_returns_none(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    # No vendored llama.cpp source and no toolchain => not possible.
+    assert orch._try_build("vulkan") is None

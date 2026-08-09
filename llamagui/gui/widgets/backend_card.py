@@ -31,10 +31,20 @@ class BackendCard(QWidget):
         self.refresh(installed, version, source)
 
     def refresh(
-        self, installed: bool, version: str | None, source: str | None = None
+        self,
+        installed: bool,
+        version: str | None,
+        source: str | None = None,
+        unavailable_reason: str = "",
     ) -> None:
         if source:
             self._badge.update_source(source)
+        if unavailable_reason:
+            self._status_label.setText("unavailable here")
+            self._status_label.setToolTip(unavailable_reason)
+            self._status_label.setStyleSheet("color: #B0846A;")
+            return
+        self._status_label.setToolTip("")
         if installed:
             self._status_label.setText(f"v{version or '?'} — installed")
             self._status_label.setStyleSheet("color: #4CAF50;")

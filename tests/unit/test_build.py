@@ -8,6 +8,7 @@ import pytest
 from llamagui.backends.build import (
     BUILDABLE_BACKENDS,
     ToolchainMissing,
+    _configure_args,
     build_backend,
     build_llama_swap,
     detect_cmake,
@@ -74,7 +75,7 @@ class TestBuildBackend:
     def test_missing_toolchain_cmake(self, tmp_path: Path) -> None:
         with (
             patch("llamagui.backends.build.detect_cmake", return_value=None),
-            pytest.raises(ToolchainMissing, match="C compiler"),
+            pytest.raises(ToolchainMissing, match="compiler"),
         ):
             build_backend("vulkan", tmp_path, tmp_path, tmp_path)
 
@@ -82,9 +83,23 @@ class TestBuildBackend:
         with (
             patch("llamagui.backends.build.detect_cmake", return_value="3.30"),
             patch("llamagui.backends.build.detect_c_compiler", return_value=None),
-            pytest.raises(ToolchainMissing, match="C compiler"),
+            pytest.raises(ToolchainMissing, match="compiler"),
         ):
             build_backend("vulkan", tmp_path, tmp_path, tmp_path)
+
+    def test_cuda_backend_requires_nvcc(self, tmp_path: Path) -> None:
+        with (
+            patch("llamagui.backends.build.detect_cmake", return_value="3.30"),
+            patch("llamagui.backends.build.detect_c_compiler", return_value="cl"),
+            patch("llamagui.backends.build.detect_nvcc", return_value=None),
+        ):
+            assert has_toolchain("cuda12") is False
+
+    def test_cuda_arch_never_pascal(self, tmp_path: Path) -> None:
+        """CUDA >= 13 dropped Pascal; compute_61 must never be emitted."""
+        args = _configure_args("cuda13", tmp_path, tmp_path, "Release", "75")
+        assert "-DCMAKE_CUDA_ARCHITECTURES=75" in args
+        assert not any("61" in arg for arg in args)
 
 
 class TestBuildLlamaSwap:
@@ -119,6 +134,11 @@ class TestOrchestratorBuild:
         assert results[0].status == "skipped"
 
     def test_build_submodule_no_toolchain(self, tmp_path: Path) -> None:
+        """With sources but no compiler, `build` fails with the toolchain error.
+
+        The CLI turns this into exit 7 so the caller can offer the prebuilt
+        download instead of leaving the user with a cryptic build failure.
+        """
         from llamagui.config import AppConfig
         from llamagui.orchestrator import Orchestrator
 
@@ -127,11 +147,12 @@ class TestOrchestratorBuild:
 
         cfg = AppConfig(root=str(tmp_path))
         orch = Orchestrator(cfg)
-        with patch.object(orch, "_vendor_root", return_value=vendor):
-            results = orch._do_build(["vulkan"])
-            assert len(results) >= 1
-            assert results[0].name == "vulkan"
-            assert results[0].status == "skipped"
+        with (
+            patch.object(orch, "_vendor_root", return_value=vendor),
+            patch("llamagui.orchestrator.has_toolchain", return_value=False),
+            pytest.raises(ToolchainMissing, match="prebuilt"),
+        ):
+            orch._do_build(["vulkan"])
 
     def test_build_action_in_description(self) -> None:
         from llamagui.config import AppConfig

@@ -7,3 +7,11 @@ dist/
 node_modules/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+# Nuitka crash reports (large XML dumps emitted on compiler failures)
+nuitka-crash-report.xml
+nuitka-crash-report*.xml
+
+# Local build verification logs
+build_err.log
+build_local.log

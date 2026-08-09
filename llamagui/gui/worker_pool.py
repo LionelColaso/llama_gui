@@ -4,7 +4,7 @@ import threading
 from typing import Any
 from unittest.mock import MagicMock
 
-from PySide6.QtCore import QObject, QRunnable, Signal
+from PySide6.QtCore import QObject, QRunnable, Signal, SignalInstance
 
 from ..orchestrator import Orchestrator
 
@@ -46,9 +46,19 @@ class EngineWorker(QRunnable):
         try:
             method = getattr(self.orch, self._action)
             result = method(**self._kwargs)
-            self.signals.finished.emit(result)
+            self._emit(self.signals.finished, result)
         except Exception as e:  # noqa: BLE001 - forward any worker error to the UI
-            self.signals.error.emit(f"{type(e).__name__}: {e}")
+            self._emit(self.signals.error, f"{type(e).__name__}: {e}")
+
+    @staticmethod
+    def _emit(signal: SignalInstance, value: object) -> None:
+        # The receiver (a GUI widget) may already be gone during shutdown; emitting
+        # to a deleted QObject raises RuntimeError, which must not propagate out of
+        # the worker thread and crash teardown.
+        try:
+            signal.emit(value)
+        except RuntimeError:  # receiver (widget) deleted during shutdown
+            pass
 
     def run(self) -> None:
         # MagicMock is not thread-safe; run synchronously for tests.

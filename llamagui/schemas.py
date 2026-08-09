@@ -19,6 +19,25 @@ class ExitCode(enum.IntEnum):
     TOOLCHAIN_MISSING = 7
 
 
+class EngineError(Exception):
+    """An engine failure that already knows its contract exit code.
+
+    Every layer (lifecycle, locking, orchestrator) raises this so the CLI and
+    the GUI can map a failure to the documented exit code (§9.2) without
+    guessing from the exception type.
+    """
+
+    def __init__(
+        self,
+        exit_code: ExitCode,
+        message: str,
+        log_tail: list[str] | None = None,
+    ) -> None:
+        self.exit_code = exit_code
+        self.log_tail = log_tail
+        super().__init__(message)
+
+
 class ResolvedBinaryData(BaseModel):
     path: str | None = None
     source: str | None = None
@@ -31,17 +50,28 @@ class BackendStatusData(BaseModel):
     installed: bool = False
     version: str | None = None
     source: str | None = None
+    prebuilt_available: bool = False
+    buildable: bool = False
+    unavailable_reason: str = ""
 
 
 class RouterStatusData(BaseModel):
+    host: str = "127.0.0.1"
     port: int = 8080
     listening: bool = False
+    pids: list[int] = []
 
 
 class LlamaSwapStatusData(BaseModel):
     installed: bool = False
     version: str | None = None
     source: str | None = None
+
+
+class PlatformData(BaseModel):
+    system: str = ""
+    arch: str = ""
+    exe_suffix: str = ""
 
 
 class StatusData(BaseModel):
@@ -52,6 +82,11 @@ class StatusData(BaseModel):
     llama_swap: LlamaSwapStatusData = LlamaSwapStatusData()
     config_present: bool = False
     resolved: dict[str, ResolvedBinaryData] = {}
+    platform: PlatformData = PlatformData()
+    root: str = ""
+    config_file: str = ""
+    ready: bool = False
+    first_run_complete: bool = False
 
 
 class InstallResultItem(BaseModel):
@@ -102,6 +137,9 @@ class BackendInfo(BaseModel):
     name: str
     notes: str = ""
     needs_cudart: bool = False
+    prebuilt_available: bool = False
+    buildable: bool = False
+    unavailable_reason: str = ""
 
 
 class BuildData(BaseModel):
@@ -111,12 +149,33 @@ class BuildData(BaseModel):
     source: str | None = None
 
 
+class BootstrapData(BaseModel):
+    """Outcome of the "make it work out of the box" first-run action."""
+
+    performed: list[str] = []
+    skipped: list[str] = []
+    backend: str | None = None
+    llama_cpp_version: str | None = None
+    llama_swap_version: str | None = None
+    ready: bool = False
+    message: str = ""
+
+
+class ConfigData(BaseModel):
+    """The saved settings, plus where they are stored."""
+
+    config_file: str = ""
+    values: dict[str, Any] = {}
+    warnings: list[str] = []
+
+
 class DescribeData(BaseModel):
     backends: list[BackendInfo] = []
     supported_sources: list[str] = []
     available_actions: list[str] = []
     defaults: dict[str, Any] = {}
     valid_exit_codes: list[int] = []
+    platform: PlatformData = PlatformData()
 
 
 class Envelope(BaseModel):

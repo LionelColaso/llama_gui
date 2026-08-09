@@ -18,9 +18,14 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pyright>=1.1",
-  "nuitka>=2.0",
   "ordered-set",
   "zstandard",
+]
+
+# Build-time only: keeps the Nuitka standalone bundle lean by excluding test
+# and type-checker deps (mypy/pyright/pytest) from the frozen binary.
+build = [
+  "nuitka>=2.0",
 ]
 
 [project.scripts]
@@ -42,7 +47,7 @@ environments = [
 line-length = 88
 indent-width = 4
 lint.extend-select = ["I"]
-exclude = ['venv', '.venv', '**/node_modules', '**/__pycache__', '**/.*']
+exclude = ['venv', '.venv', 'build', '**/node_modules', '**/__pycache__', '**/.*']
 
 [tool.ruff.format]
 quote-style = "double"
@@ -50,14 +55,14 @@ quote-style = "double"
 [tool.mypy]
 strict = true
 pretty = true
-exclude = ['venv', '.venv']
+exclude = ['venv', '.venv', 'build']
 
 [tool.pyright]
 # Type checking mode: basic, standard or strict
 pythonPlatform = "All"
 typeCheckingMode = "strict"
 useLibraryCodeForTypes = true
-exclude = ['venv', '.venv', '**/node_modules', '**/__pycache__', '**/.*']
+exclude = ['venv', '.venv', 'build', '**/node_modules', '**/__pycache__', '**/.*']
 reportMissingTypeStubs = "warning"
 reportUnknownMemberType = false
 # White-box tests intentionally inspect private members (_cards, _pages, etc.)
