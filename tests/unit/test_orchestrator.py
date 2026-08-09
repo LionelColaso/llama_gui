@@ -146,6 +146,12 @@ def _empty_release() -> dict[str, object]:
 def _assert_install_fails_no_asset(
     tmp_path: Path, action: str, **kwargs: object
 ) -> None:
+    # Pick a backend that is actually usable on THIS platform; on macOS
+    # "vulkan" is not supported, which would raise a platform error before the
+    # "No asset matching" path is reached.
+    from llamagui.models import platform_backend_names
+
+    backend = next(b for b in platform_backend_names() if b != "metal")
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)
     with (
@@ -155,7 +161,7 @@ def _assert_install_fails_no_asset(
         pytest.raises(Exception, match="No asset matching"),
     ):
         method = getattr(orch, action)
-        method(["vulkan"], **kwargs)
+        method([backend], **kwargs)
 
 
 def test_install_with_fake_root(tmp_path: Path) -> None:
@@ -174,7 +180,9 @@ def test_use_without_auto_install_raises(tmp_path: Path) -> None:
 
 def test_use_with_auto_install_obtains_backend(tmp_path: Path) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
-    backend = "vulkan"
+    from llamagui.models import platform_backend_names
+
+    backend = next(b for b in platform_backend_names() if b != "metal")
     target = tmp_path / "managed" / backend
     obtained: list[str] = []
 

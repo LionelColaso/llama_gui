@@ -238,7 +238,14 @@ def test_tar_extraction_preserves_executable_bit(tmp_path: Path) -> None:
     assert server.exists()
     if sys.platform != "win32":
         assert os.access(server, os.X_OK)
-        assert stat.S_IMODE((dest / "LICENSE").stat().st_mode) == 0o644
+        # The extracted mode must preserve the input mode subject to the
+        # process umask (POSIX extracts via tarfile, which applies umask).
+        import os as _os
+
+        umask = _os.umask(0o022)
+        _os.umask(umask)
+        expected = 0o644 & ~umask
+        assert stat.S_IMODE((dest / "LICENSE").stat().st_mode) == expected
 
 
 def test_tar_extraction_keeps_shared_library_symlinks(tmp_path: Path) -> None:

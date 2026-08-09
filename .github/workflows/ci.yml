@@ -18,11 +18,10 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
-      # macOS is excluded from the test matrix: several unit tests hardcode
-      # Linux/Windows assumptions (vulkan default backend, tar permission bits)
-      # and are not maintained for darwin. macOS still builds in the job below.
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macOS is included: the unit tests below are kept platform-aware so the
+        # full Windows/Linux/macOS gate (project requirement #6) is enforced.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
