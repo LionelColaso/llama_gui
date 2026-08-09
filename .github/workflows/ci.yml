@@ -12,6 +12,10 @@ jobs:
   check:
     name: ${{ matrix.os }} / py3.12
     runs-on: ${{ matrix.os }}
+    # Headless runners have no display server; pytest-qt (GUI tests) needs the
+    # offscreen Qt platform or it fails to create QApplication.
+    env:
+      QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +83,7 @@ jobs:
       - name: Launch smoke test (built executable runs)
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
+          if [ "$RUNNER_OS" != "Windows" ]; then
             export QT_QPA_PLATFORM=offscreen
           fi
           EXE=$(python - <<'PY'
