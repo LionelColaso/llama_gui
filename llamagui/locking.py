@@ -41,7 +41,7 @@ def mutation_lock(root: Path, timeout: float = 0.0) -> Generator[None, None, Non
 def _win32_mutex(timeout: float) -> Generator[None, None, None]:
     import ctypes
 
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)  # noqa: B009
     # Per-user (Local\...) namespace so the mutex works unelevated.
     mutex_name = "Local\\llama-gui-mutation"
 

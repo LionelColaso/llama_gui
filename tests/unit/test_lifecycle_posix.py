@@ -28,9 +28,9 @@ def test_launch_uses_new_session(tmp_path: Path) -> None:
     )
     try:
         # start_new_session makes the child its own session leader.
-        assert os.getsid(proc.pid) == proc.pid  # type: ignore[attr-defined]
+        assert getattr(os, "getsid")(proc.pid) == proc.pid  # noqa: B009
     finally:
-        os.killpg(proc.pid, signal.SIGKILL)  # type: ignore[attr-defined]
+        getattr(os, "killpg")(proc.pid, getattr(signal, "SIGKILL", 9))  # noqa: B009
         proc.wait(timeout=5)
 
 
@@ -46,19 +46,19 @@ def test_terminate_then_kill_via_process_group(tmp_path: Path) -> None:
     )
     sid = proc.pid
     try:
-        os.killpg(sid, signal.SIGTERM)  # type: ignore[attr-defined]
+        getattr(os, "killpg")(sid, signal.SIGTERM)  # noqa: B009
         # Give it a grace period, then guarantee death like lifecycle does.
         try:
             proc.wait(timeout=1.0)
         except subprocess.TimeoutExpired:
-            os.killpg(sid, signal.SIGKILL)  # type: ignore[attr-defined]
+            getattr(os, "killpg")(sid, getattr(signal, "SIGKILL", 9))  # noqa: B009
             proc.wait(timeout=5)
         assert proc.returncode is not None
         assert not lifecycle._pid_exists(proc.pid)
     finally:
         if proc.poll() is None:
             with contextlib.suppress(Exception):
-                os.killpg(sid, signal.SIGKILL)  # type: ignore[attr-defined]
+                getattr(os, "killpg")(sid, getattr(signal, "SIGKILL", 9))  # noqa: B009
 
 
 def test_stop_processes_only_kills_recorded_pids(tmp_path: Path) -> None:

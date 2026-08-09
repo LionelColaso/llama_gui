@@ -260,7 +260,7 @@ def _reap(pid: int) -> None:
     if is_windows() or not hasattr(os, "waitpid"):
         return
     with contextlib.suppress(OSError):
-        os.waitpid(pid, os.WNOHANG)  # type: ignore[attr-defined]
+        getattr(os, "waitpid")(pid, getattr(os, "WNOHANG"))  # noqa: B009
 
 
 def _stop_pid(pid: int) -> bool:
