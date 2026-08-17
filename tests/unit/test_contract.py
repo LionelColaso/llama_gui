@@ -14,7 +14,7 @@ from llamagui.schemas import (
 
 def test_contract_version_is_string() -> None:
     assert isinstance(contract_version, str)
-    assert contract_version == "1"
+    assert contract_version == "4"
 
 
 def test_exit_code_values() -> None:
@@ -25,7 +25,6 @@ def test_exit_code_values() -> None:
     assert int(ExitCode.LOCK_CONFLICT) == 4
     assert int(ExitCode.BAD_ARGUMENT) == 5
     assert int(ExitCode.CONTRACT_MISMATCH) == 6
-    assert int(ExitCode.TOOLCHAIN_MISSING) == 7
 
 
 def test_envelope_defaults() -> None:
@@ -77,7 +76,6 @@ def test_envelope_data_status() -> None:
         },
         active="vulkan",
         junction_target="vulkan",
-        config_present=True,
     )
     env = Envelope(
         contract_version=contract_version,

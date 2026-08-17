@@ -1,1 +1,1 @@
-"""Backend management: download prebuilt binaries and build from source."""
+"""Backend management: download prebuilt binaries from GitHub releases."""

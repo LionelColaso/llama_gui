@@ -4,11 +4,11 @@ from unittest.mock import MagicMock
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.pages.dashboard import DashboardPage
+from llamagui.gui.pages.backends import BackendsPage
 
 
 def test_busy_guard_prevents_worker_pileup(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    page = DashboardPage(fake_orch)
+    page = BackendsPage(fake_orch)
     qtbot.addWidget(page)
 
     # Simulate an in-flight worker by setting _busy = True
@@ -21,7 +21,7 @@ def test_busy_guard_prevents_worker_pileup(qtbot: QtBot, fake_orch: MagicMock) -
 def test_refresh_sets_busy_and_spawns_worker(
     qtbot: QtBot, fake_orch: MagicMock
 ) -> None:
-    page = DashboardPage(fake_orch)
+    page = BackendsPage(fake_orch)
     qtbot.addWidget(page)
 
     page._refresh()
@@ -31,7 +31,7 @@ def test_refresh_sets_busy_and_spawns_worker(
 
 
 def test_on_status_clears_busy(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    page = DashboardPage(fake_orch)
+    page = BackendsPage(fake_orch)
     qtbot.addWidget(page)
 
     page._busy = True
@@ -40,9 +40,9 @@ def test_on_status_clears_busy(qtbot: QtBot, fake_orch: MagicMock) -> None:
 
 
 def test_on_error_clears_busy(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    page = DashboardPage(fake_orch)
+    page = BackendsPage(fake_orch)
     qtbot.addWidget(page)
 
     page._busy = True
-    page._on_error("boom")
+    page._on_status_error("boom")
     assert page._busy is False

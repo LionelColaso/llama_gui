@@ -23,15 +23,12 @@ import httpx
 
 from ..models import Backend, backend_availability, get_backend
 from ..paths import (
-    arch_key,
     clear_quarantine,
     is_windows,
     make_executable,
-    platform_key,
 )
 
 LLAMA_CPP_REPO = "ggml-org/llama.cpp"
-LLAMA_SWAP_REPO = "mostlygeek/llama-swap"
 
 
 class PrebuiltError(Exception):
@@ -49,29 +46,6 @@ def backend_asset_pattern(backend: str) -> str | None:
     """Return the llama.cpp asset regex for ``backend`` on this platform."""
     entry = get_backend(backend)
     return entry.asset_pattern() if entry else None
-
-
-def llama_swap_asset_pattern(
-    platform: str | None = None, arch: str | None = None
-) -> str:
-    """Return the llama-swap release asset regex for a platform.
-
-    Naming (mostlygeek/llama-swap, verified v248)::
-
-        llama-swap_<ver>_windows_amd64.zip
-        llama-swap_<ver>_linux_<amd64|arm64>.tar.gz
-        llama-swap_<ver>_darwin_<amd64|arm64>.tar.gz
-    """
-    plat = platform or platform_key()
-    goarch = "arm64" if (arch or arch_key()) == "arm64" else "amd64"
-    if plat == "win32":
-        return rf"^llama-swap_.*_windows_{goarch}\.zip$"
-    if plat == "darwin":
-        return rf"^llama-swap_.*_darwin_{goarch}\.tar\.gz$"
-    return rf"^llama-swap_.*_linux_{goarch}\.tar\.gz$"
-
-
-LLAMA_SWAP_PATTERN = llama_swap_asset_pattern()
 
 
 def _cudart_pattern(entry: Backend, mode: str) -> str | None:
@@ -102,10 +76,16 @@ def set_progress_callback(cb: ProgressCallback | None) -> None:
 def emit_progress(
     component: str, bytes_done: int, bytes_total: int, phase: str
 ) -> None:
-    print(
-        f"PROGRESS\t{component}\t{bytes_done}\t{bytes_total}\t{phase}", file=sys.stderr
-    )
-    if _progress_callback is not None:
+    if _progress_callback is None:
+        # CLI mode: the PROGRESS line protocol on stderr is the progress
+        # channel (parsed via models.parse_progress_line).
+        print(
+            f"PROGRESS\t{component}\t{bytes_done}\t{bytes_total}\t{phase}",
+            file=sys.stderr,
+        )
+    else:
+        # GUI mode: the worker forwards the tick over its Qt signal; no
+        # stderr spam for a terminal that merely hosts the GUI.
         _progress_callback(bytes_done, bytes_total, phase)
 
 
@@ -118,8 +98,8 @@ def latest_release(repo: str, token: str | None = None) -> dict[str, Any]:
 
     Memoized per ``(repo, token)`` for the process lifetime: a single
     install/update run can request the same release several times (once per
-    backend plus llama-swap), and the GitHub API rate-limits unauthenticated
-    callers, so caching avoids redundant network round-trips.
+    backend), and the GitHub API rate-limits unauthenticated callers, so caching
+    avoids redundant network round-trips.
     """
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
@@ -481,39 +461,6 @@ def install_backend(
     return {"name": backend, "status": "ok", "version": tag, "bytes": asset["size"]}
 
 
-def install_llama_swap(
-    managed_root: Path,
-    downloads_dir: Path,
-    token: str | None = None,
-    force: bool = False,
-) -> dict[str, Any]:
-    """Install (or refresh) llama-swap from its latest GitHub release."""
-    release = latest_release(LLAMA_SWAP_REPO, token)
-    tag: str = release.get("tag_name", "unknown")
-    assets: list[dict[str, Any]] = release.get("assets", [])
-
-    if not force and read_version_marker(managed_root / "llama-swap") == tag:
-        return {"name": "llama-swap", "status": "skipped", "version": tag, "bytes": 0}
-
-    pattern = llama_swap_asset_pattern()
-    asset = match_asset(assets, pattern)
-    if not asset:
-        raise PrebuiltError(f"No asset matching '{pattern}' in release {tag}")
-
-    cache_path = cached_download(
-        asset["url"], asset["size"], downloads_dir, token, component="llama-swap"
-    )
-    emit_progress("llama-swap", asset["size"], asset["size"], "extract")
-    wipe_and_extract(cache_path, managed_root / "llama-swap")
-    write_version_marker(managed_root / "llama-swap", tag)
-    return {
-        "name": "llama-swap",
-        "status": "ok",
-        "version": tag,
-        "bytes": asset["size"],
-    }
-
-
 def _asset_flag(name: str) -> str:
     """Best-effort label describing what an asset contains."""
     lowered = name.lower()
@@ -543,14 +490,11 @@ def list_assets(repo: str = LLAMA_CPP_REPO, token: str | None = None) -> dict[st
 
 
 def latest_versions(token: str | None = None) -> dict[str, str | None]:
-    """Return the newest published tags for both upstream projects."""
-    versions: dict[str, str | None] = {"llama_cpp": None, "llama_swap": None}
-    for key, repo in (("llama_cpp", LLAMA_CPP_REPO), ("llama_swap", LLAMA_SWAP_REPO)):
-        try:
-            versions[key] = latest_release(repo, token).get("tag_name")
-        except PrebuiltError:
-            versions[key] = None
-    return versions
+    """Return the newest published llama.cpp release tag."""
+    try:
+        return {"llama_cpp": latest_release(LLAMA_CPP_REPO, token).get("tag_name")}
+    except PrebuiltError:
+        return {"llama_cpp": None}
 
 
 def installed_backends(managed_root: Path) -> dict[str, str]:
@@ -570,7 +514,7 @@ def installed_backends(managed_root: Path) -> dict[str, str]:
 def failure_hint(exc: Exception) -> str:
     """Human-readable next step for a failed prebuilt operation."""
     if isinstance(exc, PrebuiltUnavailable):
-        return "Build from source or point at an existing binary instead."
+        return "Point at an existing binary instead (Settings, Paths group)."
     if isinstance(exc, PrebuiltError):
         return "Check the network connection, or add a GitHub token in Settings."
     return str(exc)
@@ -578,8 +522,6 @@ def failure_hint(exc: Exception) -> str:
 
 __all__ = [
     "LLAMA_CPP_REPO",
-    "LLAMA_SWAP_PATTERN",
-    "LLAMA_SWAP_REPO",
     "PrebuiltError",
     "PrebuiltUnavailable",
     "backend_asset_pattern",
@@ -588,12 +530,10 @@ __all__ = [
     "emit_progress",
     "failure_hint",
     "install_backend",
-    "install_llama_swap",
     "installed_backends",
     "latest_release",
     "latest_versions",
     "list_assets",
-    "llama_swap_asset_pattern",
     "match_asset",
     "read_version_marker",
     "set_progress_callback",

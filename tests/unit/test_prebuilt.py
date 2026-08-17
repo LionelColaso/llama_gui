@@ -20,7 +20,6 @@ from llamagui.backends.prebuilt import (
     download_file,
     install_backend,
     installed_backends,
-    llama_swap_asset_pattern,
     match_asset,
     wipe_and_extract,
 )
@@ -59,21 +58,6 @@ def _release_assets() -> list[dict[str, Any]]:
             "browser_download_url": f"https://example.com/{name}",
         }
         for index, name in enumerate(names)
-    ]
-
-
-def _swap_assets() -> list[dict[str, Any]]:
-    names = [
-        "llama-swap_248_checksums.txt",
-        "llama-swap_248_darwin_amd64.tar.gz",
-        "llama-swap_248_darwin_arm64.tar.gz",
-        "llama-swap_248_linux_amd64.tar.gz",
-        "llama-swap_248_linux_arm64.tar.gz",
-        "llama-swap_248_windows_amd64.zip",
-    ]
-    return [
-        {"name": n, "size": 10, "browser_download_url": f"https://example.com/{n}"}
-        for n in names
     ]
 
 
@@ -131,21 +115,6 @@ def test_cudart_pack_never_matches_the_binary_archive() -> None:
     assert not binary["name"].startswith("cudart-")
 
 
-@pytest.mark.parametrize(
-    ("platform", "arch", "expected"),
-    [
-        ("win32", "x64", "llama-swap_248_windows_amd64.zip"),
-        ("linux", "x64", "llama-swap_248_linux_amd64.tar.gz"),
-        ("linux", "arm64", "llama-swap_248_linux_arm64.tar.gz"),
-        ("darwin", "arm64", "llama-swap_248_darwin_arm64.tar.gz"),
-    ],
-)
-def test_llama_swap_asset_per_platform(platform: str, arch: str, expected: str) -> None:
-    asset = match_asset(_swap_assets(), llama_swap_asset_pattern(platform, arch))
-    assert asset is not None
-    assert asset["name"] == expected
-
-
 def test_unavailable_backend_has_no_pattern() -> None:
     unavailable = "metal" if _PLATFORM != "darwin" else "cuda12"
     assert backend_asset_pattern(unavailable) is None
@@ -184,11 +153,11 @@ def test_wipe_and_extract_strips_wrapping_folder(tmp_path: Path) -> None:
 
 
 def test_wipe_and_extract_keeps_flat_archives_flat(tmp_path: Path) -> None:
-    archive = tmp_path / "swap.zip"
-    _make_zip(archive, {"llama-swap.exe": b"swap", "README.md": b"docs"})
-    dest = tmp_path / "llama-swap"
+    archive = tmp_path / "release.zip"
+    _make_zip(archive, {"tool.exe": b"tool", "README.md": b"docs"})
+    dest = tmp_path / "flat"
     wipe_and_extract(archive, dest)
-    assert (dest / "llama-swap.exe").exists()
+    assert (dest / "tool.exe").exists()
 
 
 def test_wipe_and_extract_removes_stale_files(tmp_path: Path) -> None:
@@ -270,11 +239,11 @@ def test_tar_extraction_keeps_shared_library_symlinks(tmp_path: Path) -> None:
 
 def test_zip_extraction_applies_unix_mode(tmp_path: Path) -> None:
     archive = tmp_path / "release.zip"
-    _make_zip(archive, {"llama-swap": b"go-binary"}, unix_mode=0o755)
-    dest = tmp_path / "llama-swap"
+    _make_zip(archive, {"llama-server": b"ELF"}, unix_mode=0o755)
+    dest = tmp_path / "cpu"
     wipe_and_extract(archive, dest)
     if sys.platform != "win32":
-        assert os.access(dest / "llama-swap", os.X_OK)
+        assert os.access(dest / "llama-server", os.X_OK)
 
 
 def test_extensionless_files_get_executable_bit(tmp_path: Path) -> None:

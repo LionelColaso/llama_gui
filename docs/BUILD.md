@@ -2,7 +2,7 @@
 
 ## Overview
 
-llama-gui is a PySide6 desktop application for orchestrating `llama-server` and `llama-swap` on **Windows, Linux, and macOS**. It supports four binary sources: **pointed**, **managed-prebuilt**, **managed-build**, and **system**.
+llama-gui is a PySide6 desktop application that drives `llama-server` directly on **Windows, Linux, and macOS**. `llama-server` comes from exactly one place: the **backend location** (the app downloads official prebuilt releases into it), unless the user enables the **"Use OS installed llama.cpp"** toggle, in which case the `llama-server` on `PATH` is preferred.
 
 ## Working Triple (Python / PySide6 / Nuitka)
 
@@ -14,16 +14,14 @@ llama-gui is a PySide6 desktop application for orchestrating `llama-server` and 
 
 > **Re-resolve at build time.** The versions above are examples — always verify against the actual release pages and Nuitka release notes.
 
-## Binary Resolver — Four Sources
+## Binary Resolver — One Location, One Toggle
 
 | Source | Meaning | When Used |
 |--------|---------|-----------|
-| **pointed** | User supplies explicit path(s) to already-working binaries | "I already have a working install" |
-| **managed-prebuilt** | App downloads official GitHub release archives (.zip / .tar.gz) matched to the current OS & architecture | Default "just works, no compiler" path |
-| **managed-build** | App builds from git submodules (`vendor/llama.cpp`, `vendor/llama-swap`) | "I want to build from source" |
-| **system** | Binaries found on `PATH` (`shutil.which`) | "I installed them globally" |
+| **managed-prebuilt** | App downloads official GitHub release archives (.zip / .tar.gz) matched to the current OS & architecture into the backend location | Default "just works, no compiler" path |
+| **system** | Binary found on `PATH` (`shutil.which`) | "I installed it globally" — a toggle, not a path; falls back to the backend location when `PATH` has nothing |
 
-**Runtime independence:** The submodules are a build-time/dev-time reproducibility source. At runtime the app never *requires* the submodules to be present or built — it uses whatever the resolver finds.
+**No from-source builds:** the app does not vendor or compile llama.cpp (the former `vendor/llama.cpp` submodule and managed-build path were removed). Legacy `managed-build` `.version` markers from older versions still resolve and are labeled accordingly.
 
 ## Read / Write Split
 
@@ -34,7 +32,7 @@ llama-gui is a PySide6 desktop application for orchestrating `llama-server` and 
        │ READ  (pure Python, sub-ms, no subprocess)    │ WRITE (in-process engine)
        ▼                                               ▼
   app's own managed root files:                  engine.orchestrator.*
-   - state/active.txt                            (downloads / builds / launches /
+   - state/active.txt                            (downloads / launches /
    - managed/<b>/.version                         stops / edits config)
    - managed/current  (junction target)
    + socket connect 127.0.0.1:<port>
@@ -42,12 +40,11 @@ llama-gui is a PySide6 desktop application for orchestrating `llama-server` and 
 
 ## Contract Version
 
-The `contract_version` is `"1"` and is **locked**. The CLI JSON envelope and the GUI's in-process calls share the same dataclasses in `contract.py`. The GUI checks `contract_version` against the engine it imported (trivially equal in-process, but the field exists so an externally-driven CLI can't drift silently).
+The `contract_version` is `"3"` and is **locked**. The CLI JSON envelope and the GUI's in-process calls share the same dataclasses in `schemas.py`. The GUI checks `contract_version` against the engine it imported (trivially equal in-process, but the field exists so an externally-driven CLI can't drift silently).
 
-## Submodule Pin vs Prebuilt Latest Cadence
+## Prebuilt Download Cadence
 
-- **Submodules** (`vendor/llama.cpp`, `vendor/llama-swap`): Pinned commits for reproducible builds. Update deliberately.
-- **Prebuilt downloads**: Resolved from the latest GitHub release at download time. These are two independent update cadences.
+The app resolves the latest llama.cpp GitHub release at download time. Note these are **nightly/dev builds**: llama.cpp publishes no stable releases on GitHub (see its `docs/release.md`), so "latest" moves frequently. The app does not vendor or pin llama.cpp sources.
 
 ## Toolchain Notes
 

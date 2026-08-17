@@ -14,11 +14,12 @@ llama_gui/
 │   │   └── release.yml
 │   └── dependabot.yml
 ├── docs/
+│   ├── reference/
+│   │   └── llama-server-help.txt
 │   └── BUILD.md
 ├── llamagui/
 │   ├── backends/
 │   │   ├── __init__.py
-│   │   ├── build.py
 │   │   └── prebuilt.py
 │   ├── gui/
 │   │   ├── dialogs/
@@ -26,11 +27,11 @@ llama_gui/
 │   │   │   └── first_run.py
 │   │   ├── pages/
 │   │   │   ├── __init__.py
-│   │   │   ├── actions.py
+│   │   │   ├── backends.py
 │   │   │   ├── dashboard.py
 │   │   │   ├── logs.py
 │   │   │   ├── models.py
-│   │   │   ├── resolver.py
+│   │   │   ├── server_args.py
 │   │   │   └── settings.py
 │   │   ├── widgets/
 │   │   │   ├── __init__.py
@@ -44,20 +45,23 @@ llama_gui/
 │   │   ├── app.py
 │   │   ├── main_window.py
 │   │   ├── payload.py
+│   │   ├── theme.py
 │   │   ├── token.py
 │   │   └── worker_pool.py
 │   ├── __init__.py
 │   ├── __main__.py
+│   ├── applog.py
 │   ├── cli.py
 │   ├── config.py
-│   ├── config_yaml.py
 │   ├── lifecycle.py
 │   ├── locking.py
+│   ├── model_store.py
 │   ├── models.py
 │   ├── orchestrator.py
 │   ├── paths.py
 │   ├── resolver.py
-│   └── schemas.py
+│   ├── schemas.py
+│   └── serverargs.py
 ├── scripts/
 │   ├── build.py
 │   ├── check.py
@@ -70,13 +74,14 @@ llama_gui/
 │   │   ├── conftest.py
 │   │   ├── test_dashboard.py
 │   │   ├── test_main_window.py
-│   │   └── test_phase7.py
+│   │   ├── test_phase7.py
+│   │   └── test_worker_progress_threading.py
 │   ├── integration/
 │   │   ├── __init__.py
 │   │   └── test_managed_prebuilt.py
 │   ├── unit/
 │   │   ├── __init__.py
-│   │   ├── test_build.py
+│   │   ├── test_applog.py
 │   │   ├── test_cli.py
 │   │   ├── test_config_durable.py
 │   │   ├── test_contract.py
@@ -94,7 +99,6 @@ llama_gui/
 ├── .editorconfig
 ├── .gitattributes
 ├── .gitignore
-├── .gitmodules
 ├── .jscpd.json
 ├── .pre-commit-config.yaml
 ├── .python-version

@@ -8,6 +8,23 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from loguru import logger
+
+from llamagui.applog import configure_logging
+
+
+@pytest.fixture(autouse=True)
+def _app_log(tmp_path: Path) -> Generator[None, None, None]:
+    """Route loguru to a per-test temp file.
+
+    Without this, loguru's default sink writes to stderr (breaking tests that
+    assert on captured stderr), and the enqueued worker-thread sink would
+    flush into unrelated tests. ``logger.complete()`` drains the queue on
+    teardown so each test's log is self-contained.
+    """
+    configure_logging(tmp_path / "logs")
+    yield
+    logger.complete()
 
 
 @pytest.fixture

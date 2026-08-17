@@ -6,10 +6,13 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QListWidget,
     QMenu,
     QStackedWidget,
+    QStyle,
     QSystemTrayIcon,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -17,11 +20,9 @@ from ..config import AppConfig
 from ..orchestrator import Orchestrator
 from ..schemas import InstallData
 from .dialogs.first_run import FirstRunDialog
-from .pages.actions import ActionsPage
-from .pages.dashboard import DashboardPage
+from .pages.dashboard import DashboardHome
 from .pages.logs import LogsPage
-from .pages.models import ModelsPage
-from .pages.resolver import ResolverPage
+from .pages.server_args import ServerArgsPage
 from .pages.settings import SettingsPage
 from .worker_pool import EngineWorker, WorkerPool
 
@@ -29,44 +30,67 @@ from .worker_pool import EngineWorker, WorkerPool
 class MainWindow(QWidget):
     def __init__(self, cfg: AppConfig | None = None) -> None:
         super().__init__()
+        self.setObjectName("AppRoot")
         self.setWindowTitle("llama-gui")
-        self.resize(960, 640)
+        self.resize(1024, 700)
         self._cfg = cfg or AppConfig.load()
         self._orch = Orchestrator(self._cfg)
 
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         self._nav = QListWidget()
-        self._nav.addItems(
-            ["Dashboard", "Actions", "Resolver", "Models", "Logs", "Settings"]
-        )
-        self._nav.setFixedWidth(150)
+        self._nav.setObjectName("Sidebar")
+        self._nav.addItems(["Dashboard", "Server options", "Logs", "Settings"])
         self._nav.currentRowChanged.connect(self._switch_page)
-        layout.addWidget(self._nav)
+
+        sidebar = QWidget()
+        sidebar.setObjectName("SidebarRoot")
+        sidebar.setFixedWidth(210)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
+        title = QLabel("llama-gui")
+        title.setObjectName("SidebarTitle")
+        subtitle = QLabel("llama.cpp manager")
+        subtitle.setObjectName("SidebarSubtitle")
+        header = QVBoxLayout()
+        header.setContentsMargins(18, 20, 18, 18)
+        header.setSpacing(2)
+        header.addWidget(title)
+        header.addWidget(subtitle)
+        sidebar_layout.addLayout(header)
+        sidebar_layout.addWidget(self._nav, stretch=1)
+        layout.addWidget(sidebar)
 
         self._pages = QStackedWidget()
-        self._dashboard = DashboardPage(self._orch)
-        self._actions = ActionsPage(self._orch)
-        self._resolver = ResolverPage(self._orch)
+        self._dashboard = DashboardHome(self._orch)
+        self._backends = self._dashboard.backends
 
         root_path = self._orch.cfg.root_path
-        self._models = ModelsPage(self._orch, root_path / "config.yaml")
         self._logs = LogsPage(root_path / "state")
+        self._server_args = ServerArgsPage(self._orch)
         self._settings = SettingsPage(self._orch)
 
         for page in (
             self._dashboard,
-            self._actions,
-            self._resolver,
-            self._models,
+            self._server_args,
             self._logs,
             self._settings,
         ):
             self._pages.addWidget(page)
-        layout.addWidget(self._pages)
+
+        content = QWidget()
+        content.setObjectName("ContentArea")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 20, 24, 20)
+        content_layout.addWidget(self._pages)
+        layout.addWidget(content, stretch=1)
 
         self._nav.setCurrentRow(0)
-        self._dashboard.start_refresh()
+        self._backends.start_refresh()
 
         # Auto-update timer: when enabled in config, run a headless update
         # on the configured interval and notify via the system tray.
@@ -78,7 +102,7 @@ class MainWindow(QWidget):
 
         self._tray = self._build_tray()
 
-        # "Launch router on start": fire-and-forget launch in the background.
+        # "Launch server on start": fire-and-forget launch in the background.
         if self._cfg.launch_on_start:
             worker = EngineWorker(self._orch, "launch", verify=False)
             worker.signals.error.connect(self._notify_update_error)
@@ -98,7 +122,10 @@ class MainWindow(QWidget):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return None
         tray = QSystemTrayIcon(self)
-        tray.setIcon(QIcon.fromTheme("application-x-executable"))
+        icon = QIcon.fromTheme("application-x-executable")
+        if icon.isNull():  # no freedesktop icon theme on Windows
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        tray.setIcon(icon)
         tray.setToolTip("llama-gui")
         menu = QMenu(self)
         show_action = QAction("Show", self)
@@ -124,13 +151,13 @@ class MainWindow(QWidget):
         if ready:
             return
         FirstRunDialog(self._orch, self).exec()
-        self._dashboard.start_refresh()
+        self._backends.start_refresh()
 
     def _switch_page(self, index: int) -> None:
-        self._dashboard.stop_refresh()
+        self._backends.stop_refresh()
         self._pages.setCurrentIndex(index)
         if index == 0:
-            self._dashboard.start_refresh()
+            self._backends.start_refresh()
 
     def _auto_update(self) -> None:
         worker = EngineWorker(self._orch, "update", progress_callback=None)
@@ -148,9 +175,6 @@ class MainWindow(QWidget):
             for item in data.results:
                 if item.status == "ok" and item.version:
                     updated.append(f"{item.name} → {item.version}")
-            swap = data.llama_swap or {}
-            if swap.get("status") == "ok" and swap.get("version"):
-                updated.append(f"llama-swap → {swap['version']}")
         message = "Updated: " + ", ".join(updated) if updated else "Already up to date."
         self._tray.showMessage(
             "llama-gui",
@@ -185,14 +209,14 @@ class MainWindow(QWidget):
         # called event.ignore() while a tray existed and only hid the window,
         # leaving the process alive forever.
         try:
-            self._dashboard.stop_refresh()
+            self._backends.stop_refresh()
         except Exception:  # noqa: BLE001, S110 - best-effort during shutdown
             pass
         try:
             self._update_timer.stop()
         except Exception:  # noqa: BLE001, S110
             pass
-        # Stop any running router so we don't leave an orphaned server/port.
+        # Stop any running server so we don't leave an orphaned server/port.
         try:
             self._orch.stop()
         except Exception:  # noqa: BLE001, S110 - never block shutdown on a stop error

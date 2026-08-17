@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-contract_version = "1"
+contract_version = "4"
 
 
 class ExitCode(enum.IntEnum):
@@ -16,7 +16,6 @@ class ExitCode(enum.IntEnum):
     LOCK_CONFLICT = 4
     BAD_ARGUMENT = 5
     CONTRACT_MISMATCH = 6
-    TOOLCHAIN_MISSING = 7
 
 
 class EngineError(Exception):
@@ -51,21 +50,41 @@ class BackendStatusData(BaseModel):
     version: str | None = None
     source: str | None = None
     prebuilt_available: bool = False
-    buildable: bool = False
     unavailable_reason: str = ""
 
 
-class RouterStatusData(BaseModel):
+class ServerStatusData(BaseModel):
+    """State of the llama-server process this app manages."""
+
     host: str = "127.0.0.1"
     port: int = 8080
     listening: bool = False
     pids: list[int] = []
+    model: str | None = None
 
 
-class LlamaSwapStatusData(BaseModel):
-    installed: bool = False
-    version: str | None = None
-    source: str | None = None
+class ModelInfo(BaseModel):
+    """One .gguf file in the models directory."""
+
+    name: str
+    size_bytes: int = 0
+    modified: str = ""
+
+
+class ModelsData(BaseModel):
+    """Contents of the configured models directory."""
+
+    dir: str = ""
+    models: list[ModelInfo] = []
+    active: str | None = None
+
+
+class DownloadData(BaseModel):
+    """Outcome of a model download."""
+
+    name: str
+    path: str = ""
+    size_bytes: int = 0
 
 
 class PlatformData(BaseModel):
@@ -78,9 +97,8 @@ class StatusData(BaseModel):
     backends: dict[str, BackendStatusData] = {}
     active: str | None = None
     junction_target: str | None = None
-    router: RouterStatusData = RouterStatusData()
-    llama_swap: LlamaSwapStatusData = LlamaSwapStatusData()
-    config_present: bool = False
+    server: ServerStatusData = ServerStatusData()
+    models: ModelsData = ModelsData()
     resolved: dict[str, ResolvedBinaryData] = {}
     platform: PlatformData = PlatformData()
     root: str = ""
@@ -99,13 +117,11 @@ class InstallResultItem(BaseModel):
 class InstallData(BaseModel):
     release: str | None = None
     results: list[InstallResultItem] = []
-    llama_swap: dict[str, Any] = {}
     summary: dict[str, int] = {}
 
 
 class ResolveData(BaseModel):
     llama_server: ResolvedBinaryData = ResolvedBinaryData()
-    llama_swap: ResolvedBinaryData = ResolvedBinaryData()
 
 
 class SwitchData(BaseModel):
@@ -138,15 +154,7 @@ class BackendInfo(BaseModel):
     notes: str = ""
     needs_cudart: bool = False
     prebuilt_available: bool = False
-    buildable: bool = False
     unavailable_reason: str = ""
-
-
-class BuildData(BaseModel):
-    name: str
-    status: str
-    version: str | None = None
-    source: str | None = None
 
 
 class BootstrapData(BaseModel):
@@ -156,7 +164,6 @@ class BootstrapData(BaseModel):
     skipped: list[str] = []
     backend: str | None = None
     llama_cpp_version: str | None = None
-    llama_swap_version: str | None = None
     ready: bool = False
     message: str = ""
 

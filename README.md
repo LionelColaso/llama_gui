@@ -1,17 +1,18 @@
 # llama-gui
 
-A PySide6 desktop app for orchestrating [`llama-server`](https://github.com/ggml-org/llama.cpp) and [`llama-swap`](https://github.com/mostlygeek/llama-swap) on **Windows, Linux, and macOS**. It resolves, installs, launches, monitors, and stops the servers through a GUI and a machine-readable CLI.
+A PySide6 desktop app that drives [`llama-server`](https://github.com/ggml-org/llama.cpp) directly on **Windows, Linux, and macOS**. The app's only external component is the `llama-server` binary itself — a *backend location* (a folder you point at, a managed prebuilt download, or `PATH`) plus llama.cpp is the entire external surface of the app. It resolves and installs the server binary, manages a library of `.gguf` models (list, download, set active, delete), and launches, monitors, and stops the server through a GUI and a machine-readable CLI.
+
+> **Positioning:** this is a GUI for llama.cpp and nothing else — it wraps no other server or router. (llama-swap, the model-swapping router used by early builds of this app, was removed; only backward-compat *reads* of its legacy `llama_swap` pid key remain.)
 
 ## Features
 
-- **Four binary sources**, resolved in priority order:
-  - **pointed** — use binaries you already have (a folder or separate `llama-server` / `llama-swap` paths)
-  - **managed-prebuilt** — download official GitHub release builds into a managed dir (no compiler needed)
-  - **managed-build** — build from the `vendor/` submodules with the local toolchain
-  - **system** — binaries found on `PATH`
+- **Two ways to get `llama-server`** — one location, one toggle:
+  - **backend location** (default) — the app downloads the official llama.cpp prebuilt release into its own managed tree
+  - **OS installed** (the "Use OS installed llama.cpp" toggle) — use the `llama-server` found on your `PATH`, with the downloaded backend as fallback
 - **Backends:** `vulkan` (default), `cuda13`, `cuda12`, `cpu`, `metal` (data-driven — see `models.BACKENDS`). One catalogue drives Windows, Linux **and** macOS.
-- **Auto-install / first run:** a first-run dialog appears when nothing resolves yet, offering download, point-at, or build. `bootstrap` downloads what is missing and activates it.
-- **Durable settings:** paths, chosen backend, install-source and CUDA-runtime mode live in a platform-native config dir (`%APPDATA%/llamagui`, `~/.config/llamagui`, `~/Library/Preferences/llamagui`) and survive restarts; a corrupt file is backed up, not overwritten. The GitHub token is kept only in the OS keyring.
+- **Model library:** the Models page lists the `.gguf` files in your models directory, downloads a model from a URL, sets the active model, and deletes models. The server is launched directly with the active model.
+- **Auto-install / first run:** a first-run dialog appears when nothing resolves yet, offering a download or the OS-install toggle. `bootstrap` downloads what is missing and activates it.
+- **Durable settings:** paths, chosen backend and CUDA-runtime mode live in a platform-native config dir (`%APPDATA%/llamagui`, `~/.config/llamagui`, `~/Library/Preferences/llamagui`) and survive restarts; a corrupt file is backed up, not overwritten. The GitHub token is kept only in the OS keyring.
 - **GUI:** Dashboard, Actions, Resolver, Models, Logs, Settings; system-tray with minimize-to-tray.
 - **CLI:** typed envelope + exit codes for scripting and tests (`--json`).
 
@@ -33,18 +34,19 @@ uv run python -m llamagui gui
 uv run python -m llamagui describe --json
 uv run python -m llamagui status  --json
 uv run python -m llamagui install        # managed-prebuilt backends
-uv run python -m llamagui launch         # start llama-swap
+uv run python -m llamagui launch         # start llama-server with the active model
 uv run python -m llamagui stop
 ```
 
-Other CLI actions: `resolve`, `update`, `use`, `restart`, `build`, `list-assets`, `bootstrap`, `config`.
+Other CLI actions: `resolve`, `update`, `use`, `restart`, `list-assets`, `bootstrap`, `config`, and model management: `list-models`, `download-model`, `set-model`, `remove-model`.
 
 ### Install sources
 
-`install` / `update` / `bootstrap` prefer official prebuilt releases by default. If you
-pass `--source build` (or set *Install source* to `build` in Settings), the app builds
-from the vendored `llama.cpp` source instead — and if a build is impossible (no toolchain),
-it reports `Toolchain not found` rather than silently downloading. CUDA backends bundle
+`install` / `update` / `bootstrap` download the official prebuilt `llama-server`
+releases (the GitHub "releases" are nightly/dev builds — llama.cpp publishes no
+stable releases there, so "latest" moves frequently). If a backend has no
+official prebuilt for your platform, point the app at an existing binary
+(Settings → Paths) or put it on `PATH`. CUDA backends bundle
 their runtime per the *CUDA runtime* setting (`auto` / `always` / `never`).
 
 ## Build
@@ -56,18 +58,9 @@ just build                 # runs checks, then builds into build/llamagui.dist/
 just build-version 0.1.0.0 # set a product version
 ```
 
-Building from source uses the git submodules (`vendor/llama.cpp`, `vendor/llama-swap`):
-
-```bash
-just build-source                       # git submodule update, build backends + llama-swap + GUI
-just build-llama-cpp cuda12             # only the CUDA 12 backend (skips the GUI build)
-just build-llama-swap                   # only llama-swap (skips the GUI build)
-uv run python scripts/build.py --build-llama-cpp --config Release --cuda-arch 75
-```
-
-`build.py` checks out the submodules for you (`git submodule update --init --recursive`)
-unless you pass `--skip-submodules`. Compiled binaries land in the app's managed
-directory (`<root>/managed/<backend>`), so the GUI can use them immediately.
+`scripts/build.py` is the single build entrypoint (Nuitka `--standalone`). The
+`llama-server` binary itself is **not** built here — it is downloaded as a
+prebuilt release by the app at runtime (see *Install sources*).
 
 ## Checks
 
@@ -81,9 +74,13 @@ just fix                   # auto-fix formatting + lint
 ## Documentation
 
 - [`docs/BUILD.md`](docs/BUILD.md) — Python/PySide6/Nuitka triple, resolver design, toolchain decisions.
-- [`Agent.md`](Agent.md) — design spec, invariants, and current implementation status.
+- [`AGENTS.md`](AGENTS.md) — design spec, invariants, and current implementation status.
 - [`mapping.md`](mapping.md) — generated file/folder tree (`uv run python scripts/mapping.py`).
+
+## Logs
+
+Application errors are logged via [loguru](https://loguru.readthedocs.io) to `<data-root>/logs/llamagui.log` (10 MB rotation, 7-day retention). Every CLI envelope, GUI worker failure (with traceback), llama-server spawn, and uncaught crash is recorded — the GUI has no console, so this file is the post-mortem record. `llama-server`'s own output goes to `state/llama-server.{out,err}.log` under the managed root.
 
 ## Invariant
 
-The reference directory `D:\Github\llama-prebuilt-swap\` (if present) is **read-only** — the app may point at its binaries but never writes to, edits, or executes anything under it.
+The app's only write surface is its own managed root (default `~/.llamagui`, configurable). Any install you point it at — a folder or a direct binary path — is **read-only** to the app: it resolves the `llama-server` there and runs it, but never writes to, edits, or creates anything under it (no state, no logs, no lockfiles).

@@ -3,84 +3,58 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QHeaderView,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
 
-class ModelTable(QWidget):
+def _format_size(size_bytes: int) -> str:
+    """Human-readable byte count (1.2 GB)."""
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024.0 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{size_bytes} B"
+
+
+class ModelTable(QTableWidget):
+    """Read-only listing of .gguf files: name, size, modified, active."""
+
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["ID", "Command", "Group", "Flags"])
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
+        super().__init__(0, 4, parent)
+        self.setHorizontalHeaderLabels(["Model", "Size", "Modified", "Status"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive
         )
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        layout.addWidget(self._table)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setAlternatingRowColors(True)
 
-        btn_row = QHBoxLayout()
-        add_btn = QPushButton("Add")
-        add_btn.clicked.connect(self._add_row)
-        btn_row.addWidget(add_btn)
-
-        remove_btn = QPushButton("Remove")
-        remove_btn.clicked.connect(self._remove_selected)
-        btn_row.addWidget(remove_btn)
-
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-    def _add_row(self) -> None:
-        row = self._table.rowCount()
-        self._table.insertRow(row)
-        self._table.setItem(row, 0, QTableWidgetItem(""))
-        self._table.setItem(row, 1, QTableWidgetItem(""))
-        self._table.setItem(row, 2, QTableWidgetItem(""))
-        self._table.setItem(row, 3, QTableWidgetItem(""))
-
-    def _remove_selected(self) -> None:
-        for row in sorted(
-            {i.row() for i in self._table.selectedIndexes()}, reverse=True
-        ):
-            self._table.removeRow(row)
-
-    def load_models(self, models: list[dict[str, Any]]) -> None:
-        self._table.setRowCount(0)
+    def load_models(
+        self, models: list[dict[str, Any]], active: str | None = None
+    ) -> None:
+        """Fill the table from ``list_models`` rows (dicts with name/size/modified)."""
+        self.setRowCount(0)
         for m in models:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-            self._table.setItem(row, 0, QTableWidgetItem(m.get("id", "")))
-            self._table.setItem(row, 1, QTableWidgetItem(m.get("cmd", "")))
-            self._table.setItem(row, 2, QTableWidgetItem(m.get("group", "")))
-            flags = " ".join(m.get("flags", []))
-            self._table.setItem(row, 3, QTableWidgetItem(flags))
-
-    def get_models(self) -> list[dict[str, Any]]:
-        models: list[dict[str, Any]] = []
-        for row in range(self._table.rowCount()):
-            item_id = self._table.item(row, 0)
-            item_cmd = self._table.item(row, 1)
-            item_group = self._table.item(row, 2)
-            item_flags = self._table.item(row, 3)
-            mid = item_id.text().strip() if item_id else ""
-            if not mid:
-                continue
-            flags_str = item_flags.text().strip() if item_flags else ""
-            models.append(
-                {
-                    "id": mid,
-                    "cmd": item_cmd.text().strip() if item_cmd else "",
-                    "group": item_group.text().strip() if item_group else "",
-                    "flags": flags_str.split() if flags_str else [],
-                }
+            row = self.rowCount()
+            self.insertRow(row)
+            name = str(m.get("name", ""))
+            self.setItem(row, 0, QTableWidgetItem(name))
+            self.setItem(
+                row, 1, QTableWidgetItem(_format_size(int(m.get("size_bytes", 0))))
             )
-        return models
+            self.setItem(row, 2, QTableWidgetItem(str(m.get("modified", ""))))
+            self.setItem(row, 3, QTableWidgetItem("active" if name == active else ""))
+
+    def selected_name(self) -> str | None:
+        """File name of the selected row, or None."""
+        row = self.currentRow()
+        if row < 0:
+            return None
+        item = self.item(row, 0)
+        return item.text() if item and item.text() else None

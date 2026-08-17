@@ -1,16 +1,16 @@
-"""Binary resolver: decide which ``llama-server`` / ``llama-swap`` to run.
+"""Binary resolver: decide which ``llama-server`` to run.
 
-Four sources, in the user's configured priority order (default
-``pointed → managed → system``):
+Two sources, one toggle (``AppConfig.use_os_llama_server``):
 
-``pointed``
-    Paths the user set explicitly — a folder holding both binaries, or a
-    separate path per binary. Works whether or not anything is installed.
 ``managed``
-    The app's own ``<root>/managed`` tree, populated by a prebuilt download or
-    a from-source build; the active backend is the ``managed/current`` link.
+    The app's own backend location — the ``<root>/managed`` tree, populated
+    by prebuilt downloads (legacy from-source artifacts still resolve); the
+    active backend is the ``managed/current`` link. This is the default: the
+    app downloads what is missing into the backend location.
 ``system``
-    Whatever is on ``PATH``.
+    A ``llama-server`` on ``PATH`` (OS install / package manager). Used when
+    the "Use OS installed llama.cpp" toggle is checked; the downloaded
+    backend remains the fallback when nothing is on ``PATH``.
 
 Everything here is platform-agnostic: executable naming, the executable bit and
 link resolution are handled per OS so the same config works on Windows, Linux
@@ -24,16 +24,16 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
-from .config import AppConfig, PointedPaths
+from .config import AppConfig
 from .lifecycle import read_component_version, read_link_target
 from .models import Source
 from .paths import exe_suffix, is_executable, is_windows
 
-#: Sub-directories searched (one level) when a pointed folder holds a full
+#: Sub-directories searched (one level) when a backend folder holds a full
 #: llama.cpp layout rather than the binaries directly.
 _NESTED_DIRS = ("bin", "build/bin", "build/bin/Release", "Release")
 
-BINARY_NAMES = ("llama-server", "llama-swap")
+BINARY_NAMES = ("llama-server",)
 
 
 class ResolvedBinary(NamedTuple):
@@ -76,20 +76,6 @@ def find_exe_in_folder(folder: Path, name: str) -> Path | None:
                 return candidate
             fallback = fallback or candidate
     return fallback
-
-
-def _resolve_path_setting(raw: str, name: str) -> Path | None:
-    """Interpret a user-supplied path that may be a file or a folder."""
-    candidate = Path(raw).expanduser()
-    if candidate.is_dir():
-        return find_exe_in_folder(candidate, name)
-    if candidate.is_file():
-        return candidate
-    # Tolerate a Windows path written without the .exe suffix.
-    with_suffix = candidate.with_name(candidate.name + exe_suffix())
-    if exe_suffix() and with_suffix.is_file():
-        return with_suffix
-    return None
 
 
 # ─── Validation ───────────────────────────────────────────────────────────
@@ -160,24 +146,6 @@ def _describe(path: Path, source: Source, validate: bool) -> ResolvedBinary:
 # ─── Sources ──────────────────────────────────────────────────────────────
 
 
-def _resolve_pointed(
-    pointed: PointedPaths, exe_name: str, validate: bool
-) -> ResolvedBinary | None:
-    explicit = {
-        "llama-server": pointed.llama_server,
-        "llama-swap": pointed.llama_swap,
-    }.get(exe_name)
-    if explicit:
-        found = _resolve_path_setting(explicit, exe_name)
-        if found:
-            return _describe(found, Source.POINTED, validate)
-    if pointed.folder:
-        found = _resolve_path_setting(pointed.folder, exe_name)
-        if found:
-            return _describe(found, Source.POINTED, validate)
-    return None
-
-
 def _managed_source(root: Path, name: str) -> Source:
     """Distinguish a downloaded install from a locally built one."""
     marker = read_component_version(root, name)
@@ -200,9 +168,7 @@ def _resolve_managed(
             found = find_exe_in_folder(target, exe_name)
             if found:
                 return _describe(found, _managed_source(root, target.name), validate)
-    directory = managed / (
-        "llama-swap" if exe_name == "llama-swap" else cfg.default_backend
-    )
+    directory = managed / cfg.default_backend
     found = find_exe_in_folder(directory, exe_name)
     if found:
         return _describe(found, _managed_source(root, directory.name), validate)
@@ -239,38 +205,30 @@ def _resolve_one(
     validate: bool = True,
 ) -> ResolvedBinary:
     root = cfg.root_path
-    for source_name in cfg.source_priority:
-        result: ResolvedBinary | None = None
-        if source_name == "pointed":
-            result = _resolve_pointed(cfg.pointed, exe_name, validate)
-        elif source_name == "managed":
-            result = _resolve_managed(root, cfg, exe_name, validate, use_current_link)
-        elif source_name == "system":
-            result = _resolve_system(exe_name, validate)
-        if result:
-            return result
-    return ResolvedBinary(None, None, None, False, f"{exe_name} not found")
+    if cfg.use_os_llama_server:
+        # "Use OS installed llama.cpp": try PATH first; the downloaded
+        # backend below remains the fallback so an empty PATH never dead-ends.
+        found = _resolve_system(exe_name, validate)
+        if found:
+            return found
+    found = _resolve_managed(root, cfg, exe_name, validate, use_current_link)
+    if found:
+        return found
+    hint = (
+        " (checked PATH and the backend location)"
+        if cfg.use_os_llama_server
+        else " in the backend location"
+    )
+    return ResolvedBinary(None, None, None, False, f"{exe_name} not found{hint}")
 
 
 def resolve_llama_server(cfg: AppConfig, validate: bool = True) -> ResolvedBinary:
     return _resolve_one(cfg, "llama-server", use_current_link=True, validate=validate)
 
 
-def resolve_llama_swap(cfg: AppConfig, validate: bool = True) -> ResolvedBinary:
-    return _resolve_one(cfg, "llama-swap", use_current_link=True, validate=validate)
-
-
-def resolve_both(cfg: AppConfig, validate: bool = True) -> dict[str, ResolvedBinary]:
-    return {
-        "llama_server": resolve_llama_server(cfg, validate=validate),
-        "llama_swap": resolve_llama_swap(cfg, validate=validate),
-    }
-
-
 def anything_resolved(cfg: AppConfig) -> bool:
-    """True when both binaries can be located (used to decide on first-run setup)."""
-    resolved = resolve_both(cfg, validate=False)
-    return all(r.path for r in resolved.values())
+    """True when the llama-server binary can be located (first-run decision)."""
+    return bool(resolve_llama_server(cfg, validate=False).path)
 
 
 __all__ = [
@@ -279,8 +237,6 @@ __all__ = [
     "anything_resolved",
     "current_backend_dir",
     "find_exe_in_folder",
-    "resolve_both",
     "resolve_llama_server",
-    "resolve_llama_swap",
     "validate_binary",
 ]

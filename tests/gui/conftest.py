@@ -15,9 +15,8 @@ def _describe_dict() -> dict[str, Any]:
     return {
         "root": str(Path.home() / ".llamagui"),
         "port": 8080,
-        "listen_flag": "--listen",
         "default_backend": "vulkan",
-        "source_priority": ["pointed", "managed", "system"],
+        "use_os_llama_server": False,
         "auto_update": False,
         "auto_update_interval_hours": 24,
         "launch_on_start": False,
@@ -43,9 +42,8 @@ def fake_orch() -> MagicMock:
     orch.cfg = AppConfig(
         root=d["root"],
         port=d["port"],
-        listen_flag=d["listen_flag"],
         default_backend=d["default_backend"],
-        source_priority=list(d["source_priority"]),
+        use_os_llama_server=d["use_os_llama_server"],
         auto_update=d["auto_update"],
         auto_update_interval_hours=d["auto_update_interval_hours"],
         launch_on_start=d["launch_on_start"],

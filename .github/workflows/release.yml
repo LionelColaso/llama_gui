@@ -23,7 +23,7 @@ permissions: {}
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build
     uses: ./.github/workflows/build.yml
     with:
       attest: true

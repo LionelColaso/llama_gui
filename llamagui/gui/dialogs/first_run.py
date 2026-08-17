@@ -1,9 +1,8 @@
 """First-run setup dialog.
 
-Shown when neither ``llama-server`` nor ``llama-swap`` can be resolved, so a
-fresh install offers the three ways to get going instead of a broken UI:
-download the latest releases, point at binaries the user already has, or build
-from the vendored sources.
+Shown when ``llama-server`` cannot be resolved, so a fresh install offers the
+two ways to get going instead of a broken UI: download the latest release into
+the backend location, or use the llama.cpp already installed on this system.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from typing import Any, cast
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QFormLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -21,7 +19,6 @@ from PySide6.QtWidgets import (
 )
 
 from ..payload import as_payload
-from ..widgets.path_picker import PathPicker
 from ..widgets.progress_bar import ProgressWidget
 from ..worker_pool import EngineWorker, WorkerPool
 
@@ -36,9 +33,9 @@ class FirstRunDialog(QDialog):
         layout = QVBoxLayout(self)
 
         intro = QLabel(
-            "llama-gui could not find <b>llama-server</b> or <b>llama-swap</b>.\n"
-            "Download the latest official releases, or point at binaries you "
-            "already have."
+            "llama-gui could not find <b>llama-server</b>.\n"
+            "Download the latest official release, or use the llama.cpp "
+            "already installed on this system."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -50,16 +47,13 @@ class FirstRunDialog(QDialog):
         self._download_btn.clicked.connect(self._download)
         layout.addWidget(self._download_btn)
 
-        form = QFormLayout()
-        self._server_picker = PathPicker(caption="Select llama-server")
-        self._swap_picker = PathPicker(caption="Select llama-swap")
-        form.addRow("I already have llama-server", self._server_picker)
-        form.addRow("I already have llama-swap", self._swap_picker)
-        layout.addLayout(form)
-
-        self._use_paths_btn = QPushButton("Use these paths")
-        self._use_paths_btn.clicked.connect(self._use_paths)
-        layout.addWidget(self._use_paths_btn)
+        self._use_os_btn = QPushButton("Use OS installed llama.cpp (PATH)")
+        self._use_os_btn.setToolTip(
+            "Prefer the llama-server found on PATH (OS install / package "
+            "manager) over a downloaded backend."
+        )
+        self._use_os_btn.clicked.connect(self._use_os)
+        layout.addWidget(self._use_os_btn)
 
         self._status = QLabel()
         self._status.setWordWrap(True)
@@ -81,13 +75,11 @@ class FirstRunDialog(QDialog):
         worker.signals.error.connect(self._on_error)
         WorkerPool.instance().start(worker)
 
-    def _use_paths(self) -> None:
+    def _use_os(self) -> None:
+        self._use_os_btn.setEnabled(False)
         self._orch.save_config(
             {
-                "pointed": {
-                    "llama_server": self._server_picker.value(),
-                    "llama_swap": self._swap_picker.value(),
-                },
+                "use_os_llama_server": True,
                 "first_run_complete": True,
             }
         )
@@ -119,17 +111,9 @@ class FirstRunDialog(QDialog):
 
     def _on_resolved(self, data: Any) -> None:
         payload = as_payload(data)
-        pairs: list[tuple[str, dict[str, Any]]] = [
-            ("llama-server", cast("dict[str, Any]", payload.get("llama_server") or {})),
-            ("llama-swap", cast("dict[str, Any]", payload.get("llama_swap") or {})),
-        ]
-        problems = [
-            f"{label}: {info.get('error') or 'not found'}"
-            for label, info in pairs
-            if not info.get("valid")
-        ]
-        if problems:
-            self._status.setText("\n".join(problems))
+        server = cast("dict[str, Any]", payload.get("llama_server") or {})
+        if not server.get("valid"):
+            self._status.setText(f"llama-server: {server.get('error') or 'not found'}")
             return
         self.accept()
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from llamagui.config import AppConfig, PointedPaths, config_file
+from llamagui.config import AppConfig, config_file
 
 
 def test_save_then_load_round_trips(tmp_path: Path) -> None:
@@ -16,10 +16,8 @@ def test_save_then_load_round_trips(tmp_path: Path) -> None:
         root=str(tmp_path / "root"),
         host="0.0.0.0",
         port=9999,
-        install_source="prebuilt",
         bundle_cuda_runtime="auto",
-        pointed=PointedPaths(llama_server="/opt/llama-server"),
-        source_priority=["pointed", "managed", "system"],
+        use_os_llama_server=True,
         first_run_complete=True,
     )
     cfg.save(cfg_path)
@@ -27,8 +25,7 @@ def test_save_then_load_round_trips(tmp_path: Path) -> None:
     loaded = AppConfig.load(cfg_path)
     assert loaded.root == cfg.root
     assert loaded.port == 9999
-    assert loaded.install_source == "prebuilt"
-    assert loaded.pointed.llama_server == "/opt/llama-server"
+    assert loaded.use_os_llama_server is True
     assert loaded.first_run_complete is True
 
 
@@ -97,13 +94,27 @@ def test_config_path_default_location(
     assert config_file() == tmp_path / "config.json"
 
 
-def test_save_with_pointed_separate_paths(tmp_path: Path) -> None:
+def test_legacy_pointed_keys_preserved_but_ignored(tmp_path: Path) -> None:
+    """``pointed`` / ``source_priority`` from old config files survive a save.
+
+    The app no longer reads them (backend location + OS toggle model), but
+    durability requires that an upgrade never deletes what was on disk.
+    """
     cfg_path = tmp_path / "config.json"
-    cfg = AppConfig(pointed=PointedPaths(llama_server="/a/x", llama_swap="/b/y"))
-    cfg.save(cfg_path)
+    raw = {
+        "root": str(tmp_path),
+        "pointed": {"folder": "/a/bin", "llama_server": "/a/x"},
+        "source_priority": ["pointed", "managed", "system"],
+    }
+    cfg_path.write_text(json.dumps(raw), encoding="utf-8")
+
     loaded = AppConfig.load(cfg_path)
-    assert loaded.pointed.llama_server == "/a/x"
-    assert loaded.pointed.llama_swap == "/b/y"
+    assert loaded.use_os_llama_server is False
+
+    loaded.save(cfg_path)
+    reparsed = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert reparsed["pointed"] == {"folder": "/a/bin", "llama_server": "/a/x"}
+    assert reparsed["source_priority"] == ["pointed", "managed", "system"]
 
 
 def test_token_is_never_persisted(tmp_path: Path) -> None:

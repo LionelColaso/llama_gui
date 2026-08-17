@@ -17,9 +17,13 @@ from .paths import arch_key, platform_key
 
 
 class Source(enum.StrEnum):
-    POINTED = "pointed"
     MANAGED_PREBUILT = "managed-prebuilt"
+    #: Legacy, read-only: label for ``.version`` markers written by older
+    #: versions' from-source builds. Artifacts still resolve; never produced
+    #: again (the build path was removed).
     MANAGED_BUILD = "managed-build"
+    #: ``llama-server`` found on ``PATH`` (OS install), used when the
+    #: "Use OS installed llama.cpp" toggle is on.
     SYSTEM = "system"
 
 
@@ -30,21 +34,16 @@ class Backend:
     ``assets`` maps a platform key (``win32`` / ``linux`` / ``darwin``) to a
     regular expression matching the llama.cpp release asset for that platform.
     ``{arch}`` is substituted with ``x64`` or ``arm64``. A platform missing from
-    the mapping has no official prebuilt and must be built from source (or
-    pointed at manually).
+    the mapping has no official prebuilt and cannot be downloaded.
     """
 
     name: str
     notes: str
     assets: dict[str, str] = field(default_factory=lambda: cast("dict[str, str]", {}))
-    #: ``-DGGML_<flag>=ON`` used by the from-source build; None = CPU only.
-    ggml_flag: str | None = None
     #: Regex for the matching CUDA runtime pack (Windows only).
     cudart_pattern: str | None = None
     #: True when the backend cannot run without its CUDA runtime pack.
     needs_cudart: bool = False
-    #: Platforms on which a from-source build is possible.
-    buildable_on: tuple[str, ...] = ("win32", "linux", "darwin")
 
     def asset_pattern(
         self, platform: str | None = None, arch: str | None = None
@@ -59,9 +58,6 @@ class Backend:
         self, platform: str | None = None, arch: str | None = None
     ) -> bool:
         return self.asset_pattern(platform, arch) is not None
-
-    def is_buildable(self, platform: str | None = None) -> bool:
-        return (platform or platform_key()) in self.buildable_on
 
 
 #: Windows CUDA assets are named ``...-cuda-12.4-x64.zip``; the minor version
@@ -83,43 +79,33 @@ BACKENDS: tuple[Backend, ...] = (
             "win32": r"llama-.*-bin-win-vulkan-x64\.zip",
             "linux": r"llama-.*-bin-ubuntu-vulkan-{arch}\.tar\.gz",
         },
-        ggml_flag="VULKAN",
-        buildable_on=("win32", "linux"),
     ),
     Backend(
         name="cuda13",
         notes="NVIDIA CUDA 13.x build; needs a CUDA 13 driver/toolkit",
         assets={"win32": _WIN_CUDA13},
-        ggml_flag="CUDA",
         cudart_pattern=_WIN_CUDART13,
         needs_cudart=False,
-        buildable_on=("win32", "linux"),
     ),
     Backend(
         name="cuda12",
         notes="NVIDIA CUDA 12.x build; ships its own CUDA 12 runtime DLLs",
         assets={"win32": _WIN_CUDA12},
-        ggml_flag="CUDA",
         cudart_pattern=_WIN_CUDART12,
         needs_cudart=True,
-        buildable_on=("win32", "linux"),
     ),
     Backend(
         name="cpu",
-        notes="Portable CPU-only build; always available as a fallback",
+        notes="Portable CPU-only build; fallback where a GPU prebuilt is missing (Windows/Linux)",
         assets={
             "win32": r"llama-.*-bin-win-cpu-{arch}\.zip",
             "linux": r"llama-.*-bin-ubuntu-{arch}\.tar\.gz",
         },
-        ggml_flag=None,
-        buildable_on=("win32", "linux", "darwin"),
     ),
     Backend(
         name="metal",
         notes="Apple Metal + Accelerate build (macOS only)",
         assets={"darwin": r"llama-.*-bin-macos-{arch}\.tar\.gz"},
-        ggml_flag="METAL",
-        buildable_on=("darwin",),
     ),
 )
 
@@ -138,9 +124,9 @@ def backend_names() -> list[str]:
 def platform_backends(
     platform: str | None = None, arch: str | None = None
 ) -> list[Backend]:
-    """Backends that are usable on a platform (prebuilt available or buildable)."""
+    """Backends that have an official prebuilt for the platform."""
     plat = platform or platform_key()
-    return [b for b in BACKENDS if b.has_prebuilt(plat, arch) or b.is_buildable(plat)]
+    return [b for b in BACKENDS if b.has_prebuilt(plat, arch)]
 
 
 def platform_backend_names(
@@ -181,24 +167,13 @@ def backend_availability(
         return {
             "name": name,
             "prebuilt": False,
-            "buildable": False,
             "reason": f"Unknown backend '{name}'",
         }
     prebuilt = backend.has_prebuilt(plat, arch)
-    buildable = backend.is_buildable(plat)
-    if prebuilt:
-        reason = ""
-    elif buildable:
-        reason = (
-            f"No official {plat} prebuilt for '{name}'; "
-            "build it from source or point at an existing binary."
-        )
-    else:
-        reason = f"'{name}' is not supported on {plat}."
+    reason = "" if prebuilt else f"No official {plat} prebuilt for '{name}'."
     return {
         "name": name,
         "prebuilt": prebuilt,
-        "buildable": buildable,
         "reason": reason,
     }
 
@@ -217,7 +192,6 @@ def backend_table(
                 "notes": backend.notes,
                 "needs_cudart": backend.needs_cudart,
                 "prebuilt_available": availability["prebuilt"],
-                "buildable": availability["buildable"],
                 "unavailable_reason": availability["reason"],
             }
         )

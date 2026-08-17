@@ -22,8 +22,8 @@ def test_parse_missing_fields() -> None:
 
 
 def test_parse_edge_cases() -> None:
-    ev = parse_progress_line("PROGRESS\tllama-swap\t0\t0\textract")
+    ev = parse_progress_line("PROGRESS\tmodel\t0\t0\tdownload")
     assert ev is not None
-    assert ev.component == "llama-swap"
+    assert ev.component == "model"
     assert ev.bytes_done == 0
     assert ev.bytes_total == 0

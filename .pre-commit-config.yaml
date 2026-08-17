@@ -10,7 +10,7 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic, PySide6, httpx, ruamel.yaml, keyring]
+        additional_dependencies: [pydantic, PySide6, httpx, keyring]
         args: [--ignore-missing-imports]
 
   - repo: https://github.com/RobertCraigie/pyright-python

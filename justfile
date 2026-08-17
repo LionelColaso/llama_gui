@@ -88,19 +88,6 @@ build *ARGS='': check
 build-version VERSION: check
     uv run python scripts/build.py --product-version "{{VERSION}}"
 
-# Build the vendored llama.cpp backends from source (git submodule).
-# Pass backend names to restrict, e.g. `just build-llama-cpp cuda12`.
-build-llama-cpp *BACKENDS='':
-    uv run python scripts/build.py --build-llama-cpp {{BACKENDS}} --skip-gui-build
-
-# Build the vendored llama-swap from source (git submodule).
-build-llama-swap:
-    uv run python scripts/build.py --build-llama-swap --skip-gui-build
-
-# Build everything from source: vendor submodules, then the GUI executable.
-build-source:
-    uv run python scripts/build.py --build-llama-cpp --build-llama-swap
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Dependency Management
 # ═══════════════════════════════════════════════════════════════════════════

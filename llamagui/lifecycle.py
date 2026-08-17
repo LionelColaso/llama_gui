@@ -1,6 +1,6 @@
 """Process lifecycle and file-based state reads.
 
-Launching, verifying and stopping the router works the same on all three
+Launching, verifying and stopping the llama-server works the same on all three
 platforms, using the right primitive for each:
 
 * Windows – ``DETACHED_PROCESS | CREATE_NO_WINDOW`` so no console flashes and
@@ -23,11 +23,15 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any, cast
 
+from loguru import logger
+
 from .paths import is_windows
 from .schemas import EngineError, ExitCode
+from .serverargs import options_to_cli
 
 PIDS_FILE = "state/pids.json"
 
@@ -53,12 +57,12 @@ class LifecycleError(EngineError):
 def _read_pids(root: Path) -> dict[str, Any]:
     pids_path = root / PIDS_FILE
     if not pids_path.exists():
-        return {"llama_swap": None, "servers": {}}
+        return {"llama_server": None, "servers": {}}
     try:
         data: dict[str, Any] = json.loads(pids_path.read_text(encoding="utf-8"))
         return data
     except (json.JSONDecodeError, OSError):
-        return {"llama_swap": None, "servers": {}}
+        return {"llama_server": None, "servers": {}}
 
 
 def _write_pids(root: Path, data: dict[str, Any]) -> None:
@@ -144,55 +148,81 @@ def _spawn_kwargs() -> dict[str, Any]:
 # ─── Launch ───────────────────────────────────────────────────────────────
 
 
-def build_llama_swap_args(
+def build_llama_server_args(
     exe_path: str,
-    config_path: str,
+    model_path: str,
     host: str = "127.0.0.1",
     port: int = 8080,
-    listen_flag: str = "--listen",
+    ctx_size: int = 4096,
+    n_gpu_layers: int = 999,
+    extra_args: str = "",
+    server_options: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """Compose the llama-swap command line (listen flag is optional)."""
-    cmd = [exe_path, "--config", config_path]
-    if listen_flag:
-        cmd += [listen_flag, f"{host}:{port}"]
+    """Compose the llama-server command line for one model.
+
+    Order: the app-managed flags (``-m``, ``--host``, ``--port``, ``-c``,
+    ``-ngl``), then every catalogue option the user set (stable order, see
+    :func:`llamagui.serverargs.options_to_cli`), then any raw ``extra_args``
+    last so an explicit flag can still override a generated one.
+    """
+    cmd = [
+        exe_path,
+        "-m",
+        model_path,
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    # llama.cpp: ``-c 0`` means "use the model's default context". The Settings
+    # "auto" value (-1) maps to omitting the flag so the model decides.
+    if ctx_size > 0:
+        cmd += ["-c", str(ctx_size)]
+    cmd += ["-ngl", str(n_gpu_layers)]
+    if server_options:
+        cmd.extend(options_to_cli(server_options))
+    if extra_args:
+        cmd.extend(extra_args.split())
     return cmd
 
 
-def launch_llama_swap(
-    exe_path: str,
-    config_path: str,
-    host: str = "127.0.0.1",
-    port: int = 8080,
-    listen_flag: str = "--listen",
+def launch_llama_server(
+    cmd: list[str],
+    host: str,
+    port: int,
     root: Path | None = None,
     verify: bool = False,
 ) -> int | None:
-    """Launch llama-swap detached from this process.
+    """Launch an already-built ``llama-server`` command line detached from this process.
+
+    ``cmd`` is produced by :func:`build_llama_server_args` (build and launch are
+    separate concerns, so this only owns the spawn). ``host``/``port`` are used
+    solely for post-launch port verification.
 
     Returns the PID. With ``verify=True`` the port is polled first and ``None``
-    is returned when the router never came up (invariant #6: a successful spawn
+    is returned when the server never came up (invariant #6: a successful spawn
     is not proof of liveness).
     """
-    cmd = build_llama_swap_args(exe_path, config_path, host, port, listen_flag)
+    logger.info("launching llama-server: {}", " ".join(cmd))
 
     out_log: IO[Any] | int
     err_log: IO[Any] | int
     if root:
         log_dir = root / "state"
         log_dir.mkdir(parents=True, exist_ok=True)
-        out_log = (log_dir / "llama-swap.out.log").open("w", encoding="utf-8")
-        err_log = (log_dir / "llama-swap.err.log").open("w", encoding="utf-8")
+        out_log = (log_dir / "llama-server.out.log").open("w", encoding="utf-8")
+        err_log = (log_dir / "llama-server.err.log").open("w", encoding="utf-8")
     else:
         # CLI mode without a managed root: still capture logs so --verify and
         # --json can surface diagnostics. Use a temporary directory and store
         # its path so read_log_tail can return the captured output.
         import tempfile
 
-        log_dir = Path(tempfile.mkdtemp(prefix="llama-swap-logs-"))
-        out_log = (log_dir / "llama-swap.out.log").open("w", encoding="utf-8")
-        err_log = (log_dir / "llama-swap.err.log").open("w", encoding="utf-8")
-        global _SWAP_LOG_DIR
-        _SWAP_LOG_DIR = log_dir  # pyright: ignore[reportConstantRedefinition]
+        log_dir = Path(tempfile.mkdtemp(prefix="llama-server-logs-"))
+        out_log = (log_dir / "llama-server.out.log").open("w", encoding="utf-8")
+        err_log = (log_dir / "llama-server.err.log").open("w", encoding="utf-8")
+        global _SERVER_LOG_DIR
+        _SERVER_LOG_DIR = log_dir  # pyright: ignore[reportConstantRedefinition]
 
     try:
         proc = subprocess.Popen(
@@ -204,7 +234,7 @@ def launch_llama_swap(
             **_spawn_kwargs(),
         )
     except OSError as e:
-        raise LifecycleError(1, f"Failed to launch llama-swap: {e}") from e
+        raise LifecycleError(1, f"Failed to launch llama-server: {e}") from e
     finally:
         for handle in (out_log, err_log):
             if not isinstance(handle, int):
@@ -213,7 +243,7 @@ def launch_llama_swap(
 
     if root:
         pids = _read_pids(root)
-        pids["llama_swap"] = proc.pid
+        pids["llama_server"] = proc.pid
         _write_pids(root, pids)
 
     if verify and not verify_launch(proc.pid, host, port):
@@ -250,16 +280,16 @@ def verify_launch(
 def read_log_tail(
     root: Path | None,
     state_dir: Path | None = None,
-    name: str = "llama-swap",
+    name: str = "llama-server",
     lines: int = 20,
 ) -> list[str]:
-    """Read the tail of llama-swap logs. When ``root`` is None (CLI without managed root),"""
+    """Read the tail of llama-server logs. When ``root`` is None (CLI without managed root),"""
     """use ``state_dir`` instead of ``root / "state"`` so captured logs are still readable."""
     if state_dir is None:
         if root is not None:
             state_dir = root / "state"
-        elif _SWAP_LOG_DIR is not None:
-            state_dir = _SWAP_LOG_DIR
+        elif _SERVER_LOG_DIR is not None:
+            state_dir = _SERVER_LOG_DIR
     if state_dir is None:
         return []
     # Prefer stderr (diagnostics), but fall back to stdout so a server that only
@@ -319,10 +349,13 @@ def stop_processes(
     pids = _read_pids(root)
     stopped: list[int] = []
 
+    # The server pid; a legacy "llama_swap" key (pre-llama-server-direct builds)
+    # is honoured too so an upgrade never leaves an orphaned process behind.
     targets: list[int] = []
-    ls_pid = pids.get("llama_swap")
-    if isinstance(ls_pid, int):
-        targets.append(ls_pid)
+    for key in ("llama_server", "llama_swap"):
+        pid = pids.get(key)
+        if isinstance(pid, int):
+            targets.append(pid)
     servers: dict[str, Any] = pids.get("servers", {}) or {}
     targets.extend(pid for pid in servers.values() if isinstance(pid, int))
 
@@ -337,7 +370,7 @@ def stop_processes(
     # later stop can retry).
     still_alive = [pid for pid in targets if _pid_exists(pid)]
     if targets and not still_alive:
-        _write_pids(root, {"llama_swap": None, "servers": {}})
+        _write_pids(root, {"llama_server": None, "servers": {}})
 
     # A port still accepting connections after our processes are gone is held
     # by something we did not spawn: report it, never kill it.
@@ -360,9 +393,9 @@ def stop_processes(
 def running_pids(root: Path) -> list[int]:
     """PIDs recorded by this app that are still alive."""
     pids = _read_pids(root)
-    swap_pid = cast("int | None", pids.get("llama_swap"))
+    server_pid = cast("int | None", pids.get("llama_server") or pids.get("llama_swap"))
     servers = cast("dict[str, int]", pids.get("servers", {}) or {})
-    candidates: list[int | None] = [swap_pid, *servers.values()]
+    candidates: list[int | None] = [server_pid, *servers.values()]
     return [p for p in candidates if isinstance(p, int) and _pid_exists(p)]
 
 
@@ -436,9 +469,9 @@ __all__ = [
     "PIDS_FILE",
     "LifecycleError",
     "_read_reparse_point",
-    "build_llama_swap_args",
+    "build_llama_server_args",
     "check_port",
-    "launch_llama_swap",
+    "launch_llama_server",
     "read_active_backend",
     "read_component_version",
     "read_junction_target",
@@ -455,4 +488,4 @@ __all__ = [
 
 #: Track the last temporary log directory used when ``root=None`` so that
 #: ``read_log_tail`` can return captured output in CLI mode.
-_SWAP_LOG_DIR: Path | None = None
+_SERVER_LOG_DIR: Path | None = None

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llamagui.config import AppConfig, PointedPaths
+from llamagui.config import AppConfig
 from llamagui.orchestrator import Orchestrator
 
 _SYSTEM = _platform.system().lower()
@@ -40,7 +40,7 @@ def test_describe_defaults(tmp_path: Path) -> None:
     orch = Orchestrator(cfg)
     d = orch.describe()
     assert d.defaults["port"] == 8080
-    assert d.defaults["listen_flag"] == "--listen"
+    assert d.defaults["host"] == "127.0.0.1"
 
 
 def test_status_empty(tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ def test_status_empty(tmp_path: Path) -> None:
         assert backend.installed is False
     assert s.active is None
     assert s.junction_target is None
-    assert s.router.listening is False
+    assert s.server.listening is False
 
 
 def test_status_with_backend_version(tmp_path: Path) -> None:
@@ -79,24 +79,23 @@ def test_status_with_active_backend(tmp_path: Path) -> None:
 
 def test_status_resolved_matches_dashboard_contract(tmp_path: Path) -> None:
     # Regression guard for the bug where status() keyed the `resolved` dict by
-    # backend name (path=None) instead of the binary names the dashboard reads
-    # ("llama_server"/"llama_swap"), so it never showed a real path and `ready`
-    # was permanently False.
+    # backend name (path=None) instead of the binary name the dashboard reads
+    # ("llama_server"), so it never showed a real path and `ready` was
+    # permanently False.
     bin_dir = tmp_path / "bins"
     bin_dir.mkdir()
     (bin_dir / f"llama-server{_EXE_SUFFIX}").write_text("", encoding="utf-8")
-    (bin_dir / f"llama-swap{_EXE_SUFFIX}").write_text("", encoding="utf-8")
 
-    cfg = AppConfig(root=str(tmp_path))
-    cfg.pointed = PointedPaths(folder=str(bin_dir))
+    cfg = AppConfig(root=str(tmp_path), use_os_llama_server=True)
     orch = Orchestrator(cfg)
-    s = orch.status()
+    server = str(bin_dir / f"llama-server{_EXE_SUFFIX}")
+    with patch("llamagui.resolver.shutil.which", return_value=server):
+        s = orch.status()
 
-    assert set(s.resolved.keys()) == {"llama_server", "llama_swap"}
-    # Pointed binaries are found and their paths/ sources are populated.
+    assert set(s.resolved.keys()) == {"llama_server"}
+    # OS-installed binaries are found and their paths/sources are populated.
     assert s.resolved["llama_server"].path is not None
-    assert s.resolved["llama_server"].source == "pointed"
-    assert s.resolved["llama_swap"].path is not None
+    assert s.resolved["llama_server"].source == "system"
     assert s.ready is True
 
 
@@ -172,9 +171,8 @@ def _empty_release() -> dict[str, object]:
 def _prebuilt_capable_backend() -> str:
     """A backend that has a prebuilt release on the current platform.
 
-    The "No asset matching" path is reached via the prebuilt source, so we need
-    a backend whose release actually exists (i.e. has a prebuilt) regardless of
-    whether it is also buildable here.
+    The "No asset matching" path runs the prebuilt download, so we need a
+    backend whose asset pattern exists for this platform.
     """
     from llamagui.models import BACKENDS
     from llamagui.paths import platform_key
@@ -186,32 +184,11 @@ def _prebuilt_capable_backend() -> str:
     raise AssertionError(f"no prebuilt-capable backend on {plat}")
 
 
-def _buildable_backend() -> str:
-    """A backend that is BOTH buildable and has a prebuilt on this platform.
-
-    Used for the build -> prebuilt fallback path: the build is attempted (and
-    fails with no toolchain), then the orchestrator falls back to the prebuilt
-    lookup, which (with the empty-release fixture) raises "No asset matching".
-    Picking a backend with a prebuilt is essential -- on macOS a buildable-only
-    backend like "cpu" has no darwin prebuilt and would raise a different error.
-    """
-    from llamagui.models import BACKENDS
-    from llamagui.paths import platform_key
-
-    plat = platform_key()
-    for b in BACKENDS:
-        if b.is_buildable(plat) and b.has_prebuilt(plat):
-            return b.name
-    raise AssertionError(f"no buildable+prebuilt backend on {plat}")
-
-
 def _assert_install_fails_no_asset(
     tmp_path: Path, action: str, **kwargs: object
 ) -> None:
-    # Drive the prebuilt path explicitly so the empty-release fixture reliably
-    # triggers the "No asset matching" error on every platform (on macOS
-    # "vulkan" has neither a prebuilt nor a build, which would raise a platform
-    # error before the asset lookup runs).
+    # The empty-release fixture triggers the "No asset matching" error on a
+    # backend whose asset pattern exists for this platform.
     backend = _prebuilt_capable_backend()
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)
@@ -222,7 +199,7 @@ def _assert_install_fails_no_asset(
         pytest.raises(Exception, match="No asset matching"),
     ):
         method = getattr(orch, action)
-        method([backend], source="prebuilt", **kwargs)
+        method([backend], **kwargs)
 
 
 def test_install_with_fake_root(tmp_path: Path) -> None:
@@ -246,9 +223,7 @@ def test_use_with_auto_install_obtains_backend(tmp_path: Path) -> None:
     target = tmp_path / "managed" / backend
     obtained: list[str] = []
 
-    def fake_obtain(
-        self: object, name: str, force: bool = False, source: str | None = None
-    ) -> object:
+    def fake_obtain(self: object, name: str, force: bool = False) -> object:
         target.mkdir(parents=True, exist_ok=True)
         (target / f"llama-server{_EXE_SUFFIX}").write_text("", encoding="utf-8")
         obtained.append(name)
@@ -262,28 +237,3 @@ def test_use_with_auto_install_obtains_backend(tmp_path: Path) -> None:
     assert (tmp_path / "state" / "active.txt").read_text(
         encoding="utf-8"
     ).strip() == backend
-
-
-def test_install_source_resolves_from_config_and_override(tmp_path: Path) -> None:
-    orch = Orchestrator(AppConfig(root=str(tmp_path), install_source="build"))
-    assert orch._install_source(None) == "build"
-    assert orch._install_source("prebuilt") == "prebuilt"
-
-
-def test_install_build_without_toolchain_falls_back_to_prebuilt(tmp_path: Path) -> None:
-    """No toolchain -> build is skipped -> prebuilt asset lookup still runs."""
-    orch = Orchestrator(AppConfig(root=str(tmp_path)))
-    backend = _buildable_backend()
-    with (
-        patch(
-            "llamagui.backends.prebuilt.latest_release", return_value=_empty_release()
-        ),
-        pytest.raises(Exception, match="No asset matching"),
-    ):
-        orch.install([backend], source="build")
-
-
-def test_try_build_without_toolchain_returns_none(tmp_path: Path) -> None:
-    orch = Orchestrator(AppConfig(root=str(tmp_path)))
-    # No vendored llama.cpp source and no toolchain => not possible.
-    assert orch._try_build("vulkan") is None

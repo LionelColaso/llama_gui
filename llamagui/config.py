@@ -32,11 +32,12 @@ from .paths import (
 
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_LISTEN_FLAG = "--listen"
-DEFAULT_SOURCE_PRIORITY = ["pointed", "managed", "system"]
 
-#: How binaries are obtained when the user asks to install/update.
-INSTALL_SOURCES = ("prebuilt", "build")
+#: Default context size passed to ``llama-server -c``.
+DEFAULT_CTX_SIZE = 4096
+#: Default GPU layers passed to ``llama-server -ngl`` (999 = offload all).
+DEFAULT_N_GPU_LAYERS = 999
+
 #: When to ship the CUDA runtime DLLs alongside a CUDA backend.
 CUDA_RUNTIME_MODES = ("auto", "always", "never")
 
@@ -46,31 +47,6 @@ def default_backend() -> str:
     from .models import platform_default_backend
 
     return platform_default_backend()
-
-
-@dataclass
-class PointedPaths:
-    """User-supplied binary locations (source: ``pointed``)."""
-
-    folder: str | None = None
-    llama_server: str | None = None
-    llama_swap: str | None = None
-
-    def to_dict(self) -> dict[str, str | None]:
-        return {
-            "folder": self.folder,
-            "llama_server": self.llama_server,
-            "llama_swap": self.llama_swap,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> PointedPaths:
-        data = data or {}
-        return cls(
-            folder=_clean_str(data.get("folder")),
-            llama_server=_clean_str(data.get("llama_server")),
-            llama_swap=_clean_str(data.get("llama_swap")),
-        )
 
 
 def _clean_str(value: Any) -> str | None:
@@ -85,13 +61,27 @@ class AppConfig:
     root: str = field(default_factory=lambda: str(default_root()))
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
-    listen_flag: str = DEFAULT_LISTEN_FLAG
     default_backend: str = field(default_factory=default_backend)
-    source_priority: list[str] = field(
-        default_factory=lambda: list(DEFAULT_SOURCE_PRIORITY)
+    #: Directory holding the user's .gguf models. Empty = ``<root>/models``.
+    models_dir: str = ""
+    #: File name of the model the server launches (empty = none selected).
+    active_model: str = ""
+    #: ``-c`` context size passed to llama-server.
+    ctx_size: int = DEFAULT_CTX_SIZE
+    #: ``-ngl`` GPU layers passed to llama-server (999 = offload all).
+    n_gpu_layers: int = DEFAULT_N_GPU_LAYERS
+    #: Extra raw CLI args appended to the llama-server command line.
+    extra_server_args: str = ""
+    #: Values for the data-driven server-options catalogue: ``{flag: value}``
+    #: (see :mod:`llamagui.serverargs`). A blank/absent value means "leave the
+    #: flag out and let the binary use its default". Dedicated flags
+    #: (``host``/``port``/``ctx_size``/``n_gpu_layers``) are never stored here.
+    server_options: dict[str, str] = field(
+        default_factory=lambda: cast("dict[str, str]", {})
     )
-    pointed: PointedPaths = field(default_factory=PointedPaths)
-    install_source: str = "prebuilt"
+    #: When True, prefer a ``llama-server`` found on ``PATH`` (the OS
+    #: install) over the downloaded backend in the backend location.
+    use_os_llama_server: bool = False
     bundle_cuda_runtime: str = "auto"
     auto_update: bool = False
     auto_update_interval_hours: int = 24
@@ -154,11 +144,14 @@ class AppConfig:
             "root",
             "host",
             "port",
-            "listen_flag",
+            "listen_flag",  # legacy (llama-swap era); read but ignored
             "default_backend",
-            "source_priority",
-            "pointed",
-            "install_source",
+            "models_dir",
+            "active_model",
+            "ctx_size",
+            "n_gpu_layers",
+            "extra_server_args",
+            "server_options",
             "bundle_cuda_runtime",
             "auto_update",
             "auto_update_interval_hours",
@@ -168,24 +161,25 @@ class AppConfig:
             "theme",
             "token",
         }
-        priority = cast("list[str]", data.get("source_priority") or [])
-        if not priority:
-            priority = list(DEFAULT_SOURCE_PRIORITY)
-
+        # Legacy keys (``pointed``, ``source_priority``) are no longer read;
+        # they fall into ``extra`` below and are written back verbatim, so an
+        # upgrade never deletes what the user had on disk.
+        #
         # The GitHub token is never persisted in plaintext; it lives in the OS
         # keyring (gui/token.py). A legacy plaintext token is ignored on load.
         return cls(
             root=_clean_str(data.get("root")) or str(default_root()),
             host=_clean_str(data.get("host")) or DEFAULT_HOST,
             port=_coerce_int(data.get("port"), DEFAULT_PORT),
-            listen_flag=data.get("listen_flag", DEFAULT_LISTEN_FLAG),
             default_backend=_clean_str(data.get("default_backend"))
             or default_backend(),
-            source_priority=[str(p) for p in priority],
-            pointed=PointedPaths.from_dict(data.get("pointed")),
-            install_source=_coerce_choice(
-                data.get("install_source"), INSTALL_SOURCES, "prebuilt"
-            ),
+            use_os_llama_server=bool(data.get("use_os_llama_server", False)),
+            models_dir=_clean_str(data.get("models_dir")) or "",
+            active_model=_clean_str(data.get("active_model")) or "",
+            ctx_size=_coerce_int(data.get("ctx_size"), DEFAULT_CTX_SIZE),
+            n_gpu_layers=_coerce_int(data.get("n_gpu_layers"), DEFAULT_N_GPU_LAYERS),
+            extra_server_args=_clean_str(data.get("extra_server_args")) or "",
+            server_options=_clean_server_options(data.get("server_options")),
             bundle_cuda_runtime=_coerce_choice(
                 data.get("bundle_cuda_runtime"), CUDA_RUNTIME_MODES, "auto"
             ),
@@ -232,11 +226,14 @@ class AppConfig:
                 "root": self.root,
                 "host": self.host,
                 "port": self.port,
-                "listen_flag": self.listen_flag,
                 "default_backend": self.default_backend,
-                "source_priority": list(self.source_priority),
-                "pointed": self.pointed.to_dict(),
-                "install_source": self.install_source,
+                "use_os_llama_server": self.use_os_llama_server,
+                "models_dir": self.models_dir,
+                "active_model": self.active_model,
+                "ctx_size": self.ctx_size,
+                "n_gpu_layers": self.n_gpu_layers,
+                "extra_server_args": self.extra_server_args,
+                "server_options": dict(self.server_options),
                 "bundle_cuda_runtime": self.bundle_cuda_runtime,
                 "auto_update": self.auto_update,
                 "auto_update_interval_hours": self.auto_update_interval_hours,
@@ -269,8 +266,11 @@ class AppConfig:
         return self.root_path / "state"
 
     @property
-    def models_config_path(self) -> Path:
-        return self.root_path / "config.yaml"
+    def models_dir_path(self) -> Path:
+        """Directory holding .gguf models (user-configurable, default under root)."""
+        if self.models_dir:
+            return Path(self.models_dir).expanduser()
+        return self.root_path / "models"
 
 
 def _coerce_int(value: Any, fallback: int) -> int:
@@ -282,6 +282,18 @@ def _coerce_int(value: Any, fallback: int) -> int:
 
 def _coerce_choice(value: Any, allowed: tuple[str, ...], fallback: str) -> str:
     return value if isinstance(value, str) and value in allowed else fallback
+
+
+def _clean_server_options(value: Any) -> dict[str, str]:
+    """Keep only well-formed ``{flag: value}`` string pairs from a loaded file."""
+    if not isinstance(value, dict):
+        return {}
+    raw = cast("dict[str, Any]", value)
+    cleaned: dict[str, str] = {}
+    for key, item in raw.items():
+        if key.startswith("-") and isinstance(item, str):
+            cleaned[key] = item
+    return cleaned
 
 
 def _read_json(path: Path, warnings: list[str]) -> dict[str, Any] | None:
@@ -338,13 +350,11 @@ def _fsync_dir(directory: Path) -> None:
 
 __all__ = [
     "CUDA_RUNTIME_MODES",
+    "DEFAULT_CTX_SIZE",
     "DEFAULT_HOST",
-    "DEFAULT_LISTEN_FLAG",
+    "DEFAULT_N_GPU_LAYERS",
     "DEFAULT_PORT",
-    "DEFAULT_SOURCE_PRIORITY",
-    "INSTALL_SOURCES",
     "AppConfig",
-    "PointedPaths",
     "config_file",
     "default_backend",
 ]

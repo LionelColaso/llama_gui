@@ -1,4 +1,4 @@
-"""The engine: resolve, obtain, switch, launch and stop the servers.
+"""The engine: resolve, obtain, launch and stop llama-server; manage models.
 
 Everything the GUI and the CLI can do goes through this one typed API so both
 front-ends behave identically. Mutations take the single-writer lock; reads
@@ -10,24 +10,17 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from .backends.build import (
-    ToolchainMissing,
-    build_backend,
-    build_llama_swap,
-    detect_go,
-    has_toolchain,
-)
 from .backends.prebuilt import (
     install_backend,
-    install_llama_swap,
     list_assets,
 )
-from .config import AppConfig, PointedPaths
+from .config import AppConfig
 from .lifecycle import (
+    build_llama_server_args,
     check_port,
-    launch_llama_swap,
+    launch_llama_server,
     read_active_backend,
     read_component_version,
     read_junction_target,
@@ -36,6 +29,12 @@ from .lifecycle import (
     stop_processes,
 )
 from .locking import mutation_lock
+from .model_store import (
+    ModelDownloadError,
+    download_model,
+    list_models,
+    remove_model,
+)
 from .models import (
     backend_availability,
     backend_table,
@@ -44,27 +43,34 @@ from .models import (
     platform_default_backend,
 )
 from .paths import arch_key, config_file, exe_suffix, is_windows, platform_key
-from .resolver import resolve_both, validate_binary
+from .resolver import resolve_llama_server
 from .schemas import (
     BackendInfo,
     BackendStatusData,
     BootstrapData,
-    BuildData,
     ConfigData,
     DescribeData,
+    DownloadData,
     EngineError,
     ExitCode,
     InstallData,
     InstallResultItem,
     ListAssetsData,
-    LlamaSwapStatusData,
+    ModelsData,
     PlatformData,
     ResolveData,
     ResolvedBinaryData,
-    RouterStatusData,
+    ServerStatusData,
     StatusData,
     StopData,
     SwitchData,
+)
+from .serverargs import (
+    DEDICATED_FLAGS,
+    SERVER_ARGS,
+    find_arg,
+    validate_options,
+    validate_value,
 )
 
 ACTIONS = (
@@ -74,13 +80,19 @@ ACTIONS = (
     "bootstrap",
     "install",
     "update",
-    "build",
     "use",
+    "list-models",
+    "download-model",
+    "set-model",
+    "remove-model",
     "stop",
     "launch",
     "restart",
     "list-assets",
     "config",
+    "server-args",
+    "set-arg",
+    "clear-args",
 )
 
 
@@ -101,14 +113,13 @@ class Orchestrator:
     # ─── Catalogue ───────────────────────────────────────────────────────
 
     def backend_names(self) -> list[str]:
-        """Backends usable on this platform (prebuilt available or buildable)."""
+        """Backends with an official prebuilt on this platform."""
         return platform_backend_names()
 
     def describe(self) -> DescribeData:
         return DescribeData(
             backends=[BackendInfo(**row) for row in backend_table()],
             supported_sources=[
-                "pointed",
                 "managed-prebuilt",
                 "managed-build",
                 "system",
@@ -117,9 +128,9 @@ class Orchestrator:
             defaults={
                 "host": self.cfg.host,
                 "port": self.cfg.port,
-                "listen_flag": self.cfg.listen_flag,
                 "backend": platform_default_backend(),
                 "root": str(self.root),
+                "models_dir": str(self.cfg.models_dir_path),
                 "config_file": str(config_file()),
             },
             valid_exit_codes=[int(code) for code in ExitCode],
@@ -131,8 +142,9 @@ class Orchestrator:
     def status(self) -> StatusData:
         # Fast path: no `--version` subprocesses, so the dashboard can poll.
         # The per-backend install state comes from the `.version` markers; the
-        # resolved binaries come from resolve_both(validate=False), which only
-        # does existence checks (no subprocess) so the dashboard invariant holds.
+        # resolved binary comes from resolve_llama_server(validate=False), which
+        # only does an existence check (no subprocess) so the dashboard invariant
+        # holds.
         backends: dict[str, BackendStatusData] = {}
         for row in backend_table():
             name = str(row["name"])
@@ -144,54 +156,37 @@ class Orchestrator:
                 version=version,
                 source=source,
                 prebuilt_available=bool(row["prebuilt_available"]),
-                buildable=bool(row["buildable"]),
                 unavailable_reason=str(row["unavailable_reason"]),
             )
 
-        swap_marker = read_component_version(self.root, "llama-swap")
-        # Resolve the actual binaries (file-existence only) so the dashboard can
-        # show the real paths and `ready` reflects what is actually present.
-        resolved = {
-            name: _to_resolved(binary)
-            for name, binary in resolve_both(self.cfg, validate=False).items()
-        }
+        # Resolve the binary (file-existence only) so the dashboard can show the
+        # real path and `ready` reflects what is actually present.
+        server = resolve_llama_server(self.cfg, validate=False)
+        models = self.list_models()
         return StatusData(
             backends=backends,
             active=read_active_backend(self.root),
             junction_target=read_junction_target(self.root),
-            router=RouterStatusData(
+            server=ServerStatusData(
                 host=self.cfg.host,
                 port=self.cfg.port,
                 listening=check_port(self.cfg.host, self.cfg.port),
                 pids=running_pids(self.root),
+                model=models.active,
             ),
-            llama_swap=LlamaSwapStatusData(
-                installed=swap_marker is not None,
-                version=swap_marker[0] if swap_marker else None,
-                source=swap_marker[1] if swap_marker else None,
-            ),
-            config_present=self.cfg.models_config_path.exists(),
-            resolved=resolved,
+            models=models,
+            resolved={"llama_server": _to_resolved(server)},
             platform=_platform_data(),
             root=str(self.root),
             config_file=str(config_file()),
-            ready=all(r.path for r in resolved.values()),
+            ready=bool(server.path),
             first_run_complete=self.cfg.first_run_complete,
         )
 
     def resolve(self) -> ResolveData:
-        """Authoritative resolution: runs each binary to confirm it works."""
-        resolved = resolve_both(self.cfg, validate=True)
+        """Authoritative resolution: runs the binary to confirm it works."""
         return ResolveData(
-            llama_server=_to_resolved(resolved["llama_server"]),
-            llama_swap=_to_resolved(resolved["llama_swap"]),
-        )
-
-    def validate_path(self, path: str) -> ResolvedBinaryData:
-        """Probe an arbitrary path (used by the Settings "Validate" button)."""
-        valid, version, error = validate_binary(path)
-        return ResolvedBinaryData(
-            path=path, source="pointed", version=version, valid=valid, error=error
+            llama_server=_to_resolved(resolve_llama_server(self.cfg, validate=True))
         )
 
     def log_tail(self, lines: int = 200) -> list[str]:
@@ -213,15 +208,7 @@ class Orchestrator:
         atomically, so a settings change can never lose the rest of the config.
         """
         merged = self.cfg.to_dict()
-        for key, value in data.items():
-            if key == "pointed" and isinstance(value, dict):
-                pointed: dict[str, Any] = cast(
-                    "dict[str, Any]", dict(merged.get("pointed") or {})
-                )
-                pointed.update(cast("dict[str, Any]", value))
-                merged["pointed"] = pointed
-            else:
-                merged[key] = value
+        merged.update(data)
 
         token = data.get("token")
         updated = AppConfig.from_dict(merged)
@@ -230,101 +217,71 @@ class Orchestrator:
         self.cfg = updated
         return self.config()
 
-    def set_pointed_paths(
-        self,
-        folder: str | None = None,
-        llama_server: str | None = None,
-        llama_swap: str | None = None,
-    ) -> ConfigData:
-        """Point the resolver at binaries the user already has (requirement 3)."""
-        return self.save_config(
-            {
-                "pointed": PointedPaths(
-                    folder=folder, llama_server=llama_server, llama_swap=llama_swap
-                ).to_dict()
-            }
-        )
-
     # ─── Obtain ──────────────────────────────────────────────────────────
 
     def install(
         self,
         backends: list[str] | None = None,
         force: bool = False,
-        source: str | None = None,
     ) -> InstallData:
         with mutation_lock(self.root):
-            return self._do_install(backends, force, source)
+            return self._do_install(backends, force)
 
     def update(
         self,
         backends: list[str] | None = None,
         force: bool = True,
-        source: str | None = None,
     ) -> InstallData:
         with mutation_lock(self.root):
-            return self._do_install(backends, force, source)
-
-    def build(self, backends: list[str] | None = None) -> list[BuildData]:
-        """Build from the vendored submodules; no silent prebuilt fallback."""
-        with mutation_lock(self.root):
-            return self._do_build(backends)
+            return self._do_install(backends, force)
 
     def bootstrap(
         self, backend: str | None = None, force: bool = False
     ) -> BootstrapData:
         """Make the app usable out of the box (requirement 2).
 
-        Downloads the latest llama.cpp backend and llama-swap release only for
-        the pieces that are not already available — anything the resolver
-        already finds (pointed, system, or a previous managed install) is left
+        Downloads the latest llama.cpp backend into the backend location only
+        when it is not already available — anything the resolver already finds
+        (the OS install when the toggle is on, or a previous download) is left
         alone.
         """
         with mutation_lock(self.root):
             target = backend or self._preferred_backend()
             self._require_known_backend(target)
 
-            resolved = resolve_both(self.cfg, validate=False)
+            already = bool(resolve_llama_server(self.cfg, validate=False).path)
             performed: list[str] = []
             skipped: list[str] = []
             cpp_version: str | None = None
-            swap_version: str | None = None
 
-            # Always obtain the backend through the installer so that the
-            # returned version is the single source of truth (no second
-            # filesystem read of the .version marker).
-            result = self._obtain_backend(target, force=force)
-            cpp_version = result.version
-            (performed if result.status == "ok" else skipped).append(
-                f"llama.cpp:{target}"
-            )
-            if result.status == "ok":
-                self._activate(target)
-
-            if force or not resolved["llama_swap"].path:
-                swap = self._obtain_llama_swap(force=force)
-                swap_version = str(swap.get("version") or "") or None
-                (performed if swap.get("status") == "ok" else skipped).append(
-                    "llama-swap"
-                )
+            if already and not force:
+                skipped.append("llama.cpp (already available)")
+                cpp_version = _marker_version(self.root, target)
             else:
-                skipped.append("llama-swap (already available)")
-                swap_version = _marker_version(self.root, "llama-swap")
+                # Always obtain the backend through the installer so that the
+                # returned version is the single source of truth (no second
+                # filesystem read of the .version marker).
+                result = self._obtain_backend(target, force=force)
+                cpp_version = result.version
+                (performed if result.status == "ok" else skipped).append(
+                    f"llama.cpp:{target}"
+                )
+                if result.status == "ok":
+                    self._activate(target)
 
             self.cfg.first_run_complete = True
             self.cfg.save()
 
-            ready = all(r.path for r in resolve_both(self.cfg, validate=False).values())
+            ready = bool(resolve_llama_server(self.cfg, validate=False).path)
             return BootstrapData(
                 performed=performed,
                 skipped=skipped,
                 backend=target,
                 llama_cpp_version=cpp_version,
-                llama_swap_version=swap_version,
                 ready=ready,
-                message=(
-                    "Ready to launch." if ready else "Some binaries are still missing."
-                ),
+                message="Ready to launch."
+                if ready
+                else "llama-server is still missing.",
             )
 
     # ─── Switch ──────────────────────────────────────────────────────────
@@ -358,27 +315,36 @@ class Orchestrator:
     # ─── Run ─────────────────────────────────────────────────────────────
 
     def launch(self, verify: bool = False) -> int | None:
-        resolved = resolve_both(self.cfg, validate=True)
-        swap = resolved["llama_swap"]
-        if not swap.path or not swap.valid:
+        resolved = resolve_llama_server(self.cfg, validate=True)
+        if not resolved.path or not resolved.valid:
             raise EngineError(
                 ExitCode.NOT_AVAILABLE,
-                "llama-swap is not available: "
-                + (swap.error or "install it, point at it, or add it to PATH."),
+                "llama-server is not available: "
+                + (
+                    resolved.error
+                    or "download a backend or enable the OS install toggle."
+                ),
+                self.log_tail(20),
             )
-        config_path = self.cfg.models_config_path
-        if not config_path.exists():
+        model = self._resolve_model_path()
+        # Reject a bad server_options value before spawning anything.
+        errors = validate_options(self.cfg.server_options)
+        if errors:
+            first = next(iter(errors.values()))
             raise EngineError(
-                ExitCode.NOT_AVAILABLE,
-                f"No llama-swap config at {config_path}. Add a model on the "
-                "Models page first.",
+                ExitCode.BAD_ARGUMENT,
+                f"Invalid server option: {first}",
+                self.log_tail(20),
             )
-        return launch_llama_swap(
-            exe_path=swap.path,
-            config_path=str(config_path),
+        # A previously launched server still holding the port would make the new
+        # one fail to bind, so stop our own instance first (never others').
+        if check_port(self.cfg.host, self.cfg.port):
+            stop_processes(self.root, host=self.cfg.host, port=self.cfg.port)
+        cmd = self._server_args_for(resolved.path, str(model))
+        return launch_llama_server(
+            cmd,
             host=self.cfg.host,
             port=self.cfg.port,
-            listen_flag=self.cfg.listen_flag,
             root=self.root,
             verify=verify,
         )
@@ -395,6 +361,208 @@ class Orchestrator:
     def list_assets(self) -> ListAssetsData:
         return ListAssetsData(**list_assets(token=self._github_token()))
 
+    # ─── Models ──────────────────────────────────────────────────────────
+
+    def _models_dir(self) -> Path:
+        return self.cfg.models_dir_path
+
+    def _resolve_model_path(self) -> Path:
+        """Pick the model to launch: the active one, else the only one present."""
+        models_dir = self._models_dir()
+        if self.cfg.active_model:
+            candidate = models_dir / self.cfg.active_model
+            if candidate.is_file():
+                return candidate
+        models = list_models(models_dir)
+        if len(models) == 1:
+            return models_dir / models[0].name
+        if not models:
+            raise EngineError(
+                ExitCode.NOT_AVAILABLE,
+                f"No models in {models_dir}. Add one on the Models page "
+                "(download a .gguf, or copy a file into that folder).",
+            )
+        names = ", ".join(m.name for m in models[:5])
+        raise EngineError(
+            ExitCode.NOT_AVAILABLE,
+            f"{len(models)} models in {models_dir} — select one first "
+            f"(Models page): {names}{'…' if len(models) > 5 else ''}",
+        )
+
+    def list_models(self) -> ModelsData:
+        models_dir = self._models_dir()
+        models = list_models(models_dir)
+        active: str | None = self.cfg.active_model
+        if active and not (models_dir / active).is_file():
+            active = None
+        return ModelsData(dir=str(models_dir), models=models, active=active)
+
+    def download_model(self, url: str) -> DownloadData:
+        with mutation_lock(self.root):
+            try:
+                return download_model(url, self._models_dir())
+            except (ModelDownloadError, OSError) as e:
+                raise EngineError(
+                    ExitCode.NETWORK_ERROR, f"Model download failed: {e}"
+                ) from e
+
+    def set_active_model(self, name: str) -> ModelsData:
+        """Mark a model as the one the server launches (persisted in config)."""
+        if not (self._models_dir() / name).is_file():
+            raise EngineError(ExitCode.NOT_AVAILABLE, f"No such model: {name}")
+        self.save_config({"active_model": name})
+        return self.list_models()
+
+    def remove_model(self, name: str) -> ModelsData:
+        with mutation_lock(self.root):
+            try:
+                remove_model(self._models_dir(), name)
+            except FileNotFoundError as e:
+                raise EngineError(ExitCode.NOT_AVAILABLE, str(e)) from e
+            except ModelDownloadError as e:
+                raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
+            if self.cfg.active_model == name:
+                self.save_config({"active_model": ""})
+        return self.list_models()
+
+    # ─── Server arguments ────────────────────────────────────────────────
+
+    def describe_server_args(self, flag: str | None = None) -> dict[str, Any]:
+        """The full options catalogue with the currently configured values."""
+        rows: list[dict[str, Any]] = []
+        for arg in SERVER_ARGS:
+            if flag and arg.flag != flag and flag not in arg.aliases:
+                continue
+            value = (
+                self._dedicated_value(arg.flag)
+                if arg.flag in DEDICATED_FLAGS
+                else self.cfg.server_options.get(arg.flag, "")
+            )
+            rows.append(
+                {
+                    "flag": arg.flag,
+                    "aliases": list(arg.aliases),
+                    "section": arg.section,
+                    "kind": arg.kind.value,
+                    "choices": list(arg.choices),
+                    "default": arg.default,
+                    "negated": arg.negated,
+                    "env": arg.env,
+                    "volatile": arg.volatile,
+                    "app_managed": arg.app_managed,
+                    "is_dir": arg.is_dir,
+                    "deprecated": arg.deprecated,
+                    "help": arg.help,
+                    "value": value,
+                }
+            )
+        return {"args": rows, "count": len(rows)}
+
+    def set_server_arg(self, flag: str, value: str) -> dict[str, Any]:
+        """Set one option ('' or 'default' resets it). Returns the option row."""
+        arg = find_arg(flag)
+        if arg is None:
+            raise EngineError(
+                ExitCode.BAD_ARGUMENT,
+                f"Unknown option '{flag}'. List them with 'server-args'.",
+            )
+        if arg.volatile:
+            raise EngineError(
+                ExitCode.BAD_ARGUMENT,
+                f"{arg.flag} is a one-shot flag ({arg.help}); "
+                "it cannot be passed to a running server.",
+            )
+        canon = arg.flag
+        if canon in DEDICATED_FLAGS:
+            self.save_config(self._dedicated_values_for_set(canon, value))
+        else:
+            normalized = validate_value(arg, value)
+            options = dict(self.cfg.server_options)
+            if normalized:
+                options[canon] = normalized
+            else:
+                options.pop(canon, None)
+            self.save_config({"server_options": options})
+        return self.describe_server_args(canon)
+
+    def clear_server_args(self) -> dict[str, Any]:
+        """Reset every catalogue option to its default ('' / omitted)."""
+        self.save_config({"server_options": {}})
+        return self.describe_server_args()
+
+    def _server_args_for(self, exe_path: str, model_path: str) -> list[str]:
+        """Build the llama-server command line from the current config."""
+        return build_llama_server_args(
+            exe_path=exe_path,
+            model_path=model_path,
+            host=self.cfg.host,
+            port=self.cfg.port,
+            ctx_size=self.cfg.ctx_size,
+            n_gpu_layers=self.cfg.n_gpu_layers,
+            extra_args=self.cfg.extra_server_args,
+            server_options=self.cfg.server_options,
+        )
+
+    def preview_command(self) -> list[str]:
+        """The exact command line ``launch`` would run (best-effort model path)."""
+        resolved = resolve_llama_server(self.cfg, validate=False)
+        exe = resolved.path or "llama-server"
+        try:
+            model = str(self._resolve_model_path())
+        except EngineError:
+            model = "<model>"
+        return self._server_args_for(exe, model)
+
+    def _dedicated_value(self, flag: str) -> str:
+        """The current string value of a dedicated (non-catalogue) flag."""
+        if flag == "--host":
+            return self.cfg.host
+        if flag == "--port":
+            return str(self.cfg.port)
+        if flag == "--ctx-size":
+            return str(self.cfg.ctx_size) if self.cfg.ctx_size > 0 else ""
+        if flag == "--n-gpu-layers":
+            return str(self.cfg.n_gpu_layers)
+        return ""
+
+    def _dedicated_values_for_set(self, flag: str, value: str) -> dict[str, Any]:
+        """Map a dedicated flag assignment onto the AppConfig fields."""
+        value = value.strip()
+        if flag == "--host":
+            if not value:
+                return {"host": "127.0.0.1"}
+            return {"host": value}
+        if flag == "--port":
+            if not value:
+                return {"port": 8080}
+            try:
+                return {"port": int(value)}
+            except ValueError as exc:
+                raise EngineError(
+                    ExitCode.BAD_ARGUMENT, f"--port expects an integer, got '{value}'"
+                ) from exc
+        if flag == "--ctx-size":
+            if not value or value in ("auto", "default"):
+                return {"ctx_size": -1}
+            try:
+                return {"ctx_size": int(value)}
+            except ValueError as exc:
+                raise EngineError(
+                    ExitCode.BAD_ARGUMENT,
+                    f"--ctx-size expects an integer or 'auto', got '{value}'",
+                ) from exc
+        if flag == "--n-gpu-layers":
+            if not value or value in ("auto", "all", "default"):
+                return {"n_gpu_layers": -1}
+            try:
+                return {"n_gpu_layers": int(value)}
+            except ValueError as exc:
+                raise EngineError(
+                    ExitCode.BAD_ARGUMENT,
+                    f"--n-gpu-layers expects an integer, 'auto' or 'all', got '{value}'",
+                ) from exc
+        raise EngineError(ExitCode.BAD_ARGUMENT, f"Unknown dedicated flag '{flag}'")
+
     # ─── Internals ───────────────────────────────────────────────────────
 
     def _preferred_backend(self) -> str:
@@ -410,23 +578,16 @@ class Orchestrator:
                 f"Unknown backend '{backend}'. Known: {', '.join(self.backend_names())}",
             )
 
-    def _install_source(self, override: str | None = None) -> str:
-        return override or self.cfg.install_source
-
-    def _do_install(
-        self, backends: list[str] | None, force: bool, source: str | None
-    ) -> InstallData:
+    def _do_install(self, backends: list[str] | None, force: bool) -> InstallData:
         names = backends or [self._preferred_backend()]
         results: list[InstallResultItem] = []
         for name in names:
             self._require_known_backend(name)
-            results.append(self._obtain_backend(name, force=force, source=source))
+            results.append(self._obtain_backend(name, force=force))
 
-        swap = self._obtain_llama_swap(force=force, source=source)
         return InstallData(
             release=next((r.version for r in results if r.version), None),
             results=results,
-            llama_swap=swap,
             summary={
                 "updated": sum(1 for r in results if r.status == "ok"),
                 "skipped": sum(1 for r in results if r.status == "skipped"),
@@ -434,19 +595,11 @@ class Orchestrator:
             },
         )
 
-    def _obtain_backend(
-        self, backend: str, force: bool, source: str | None = None
-    ) -> InstallResultItem:
-        """Download (default) or build one backend, with a sensible fallback."""
-        want = self._install_source(source)
+    def _obtain_backend(self, backend: str, force: bool) -> InstallResultItem:
+        """Download the official prebuilt release for one backend."""
         availability = backend_availability(backend)
-
-        if want == "build" or not availability["prebuilt"]:
-            built = self._try_build(backend)
-            if built is not None:
-                return built
-            if not availability["prebuilt"]:
-                raise EngineError(ExitCode.NOT_AVAILABLE, availability["reason"])
+        if not availability["prebuilt"]:
+            raise EngineError(ExitCode.NOT_AVAILABLE, availability["reason"])
 
         result = install_backend(
             backend,
@@ -463,95 +616,6 @@ class Orchestrator:
             bytes=result.get("bytes"),
         )
 
-    def _try_build(self, backend: str) -> InstallResultItem | None:
-        """Attempt a from-source build; return None when it is not possible."""
-        source_dir = self._vendor_root() / "llama.cpp"
-        if not source_dir.exists() or not has_toolchain(backend):
-            return None
-        try:
-            data = build_backend(
-                backend, self.managed_root, source_dir, self.root / "build"
-            )
-        except (ToolchainMissing, RuntimeError):
-            return None
-        return InstallResultItem(
-            name=data["name"],
-            status=data["status"],
-            version=data.get("version"),
-            bytes=data.get("bytes"),
-        )
-
-    def _obtain_llama_swap(
-        self, force: bool, source: str | None = None
-    ) -> dict[str, Any]:
-        if self._install_source(source) == "build":
-            source_dir = self._vendor_root() / "llama-swap"
-            if source_dir.exists() and detect_go():
-                try:
-                    return build_llama_swap(
-                        self.managed_root, source_dir, self.root / "build"
-                    )
-                except (ToolchainMissing, RuntimeError):
-                    pass  # fall through to the prebuilt release
-        return install_llama_swap(
-            self.managed_root, self.cfg.downloads_dir, self._github_token(), force
-        )
-
-    def _do_build(self, backends: list[str] | None) -> list[BuildData]:
-        source_root = self._vendor_root()
-        build_root = self.root / "build"
-        build_root.mkdir(parents=True, exist_ok=True)
-        names = backends or [self._preferred_backend()]
-
-        results: list[BuildData] = []
-        missing_toolchain: list[str] = []
-        for name in names:
-            self._require_known_backend(name)
-            source_dir = source_root / "llama.cpp"
-            if not source_dir.exists():
-                results.append(
-                    BuildData(name=name, status="skipped", source="no-submodule")
-                )
-                continue
-            if not has_toolchain(name):
-                # Reported per backend so a mixed request still builds what it
-                # can; the CLI turns an all-skipped run into exit 7.
-                missing_toolchain.append(name)
-                results.append(
-                    BuildData(name=name, status="skipped", source="no-toolchain")
-                )
-                continue
-            try:
-                results.append(
-                    BuildData(
-                        **build_backend(name, self.managed_root, source_dir, build_root)
-                    )
-                )
-            except RuntimeError as e:
-                results.append(BuildData(name=name, status="failed", version=str(e)))
-
-        swap_src = source_root / "llama-swap"
-        if swap_src.exists() and detect_go():
-            try:
-                results.append(
-                    BuildData(
-                        **build_llama_swap(self.managed_root, swap_src, build_root)
-                    )
-                )
-            except (ToolchainMissing, RuntimeError) as e:
-                results.append(
-                    BuildData(name="llama-swap", status="failed", version=str(e))
-                )
-
-        if missing_toolchain and len(missing_toolchain) == len(names):
-            raise ToolchainMissing(
-                "cmake/compiler",
-                "No build toolchain found for "
-                f"{', '.join(missing_toolchain)}. Download the prebuilt release "
-                "instead (Actions → Install).",
-            )
-        return results
-
     def _activate(self, backend: str) -> None:
         """Point ``managed/current`` at a backend and record it in state."""
         target = self.managed_root / backend
@@ -561,13 +625,6 @@ class Orchestrator:
         state_file = self.cfg.state_dir / "active.txt"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(backend + "\n", encoding="utf-8")
-
-    def _vendor_root(self) -> Path:
-        """Locate the ``vendor/`` submodules next to the installed package."""
-        candidate = Path(__file__).resolve().parent.parent / "vendor"
-        if candidate.exists():
-            return candidate
-        return self.root / "vendor"
 
     def _github_token(self) -> str | None:
         if self.cfg.token:

@@ -2,8 +2,7 @@
 
 The catalogue encodes the portability contract: the same backend names map to
 different download assets per OS/arch, and some backends are simply unavailable
-on a given platform (no build toolchain = not buildable, no prebuilt asset =
-not prebuilt-available).
+on a given platform (no official prebuilt asset).
 """
 
 from __future__ import annotations
@@ -32,7 +31,6 @@ def test_backend_table_lists_every_backend() -> None:
     assert listed == {"vulkan", "cuda13", "cuda12", "cpu", "metal"}
     for row in table:
         assert "prebuilt_available" in row
-        assert "buildable" in row
         assert "unavailable_reason" in row
 
 
@@ -76,24 +74,21 @@ def test_platform_default_is_supported_here() -> None:
 @pytest.mark.skipif(sys.platform != "darwin", reason="metal only meaningful on macOS")
 def test_metal_is_available_on_darwin() -> None:
     availability = backend_availability("metal", platform="darwin", arch="arm64")
-    assert availability["prebuilt"] or availability["buildable"]
+    assert availability["prebuilt"]
 
 
 def test_availability_reports_reason_when_unavailable() -> None:
-    # metal has no Windows prebuilt and is not buildable on Windows.
+    # metal has no Windows prebuilt.
     availability = backend_availability("metal", platform="win32", arch="x64")
     assert availability["prebuilt"] is False
-    assert availability["buildable"] is False
     assert availability["reason"]
 
 
-def test_cuda13_not_buildable_without_nvcc_on_windows() -> None:
-    backend = BACKEND_BY_NAME["cuda13"]
-    # Build availability is toolchain-driven; the catalogue flags the platform.
-    assert "win32" in backend.buildable_on or "win32" not in backend.buildable_on
-
-
-def test_cpu_backend_available_everywhere() -> None:
-    for platform in ("win32", "linux", "darwin"):
+def test_cpu_backend_available_where_prebuilt_exists() -> None:
+    for platform in ("win32", "linux"):
         availability = backend_availability("cpu", platform=platform, arch="x64")
-        assert availability["prebuilt"] or availability["buildable"]
+        assert availability["prebuilt"]
+    # macOS ships a single universal (Metal) prebuilt; there is no separate
+    # cpu asset, so cpu is not an installable backend there.
+    availability = backend_availability("cpu", platform="darwin", arch="arm64")
+    assert availability["prebuilt"] is False

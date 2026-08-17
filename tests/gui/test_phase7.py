@@ -1,110 +1,101 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+from PySide6.QtWidgets import QComboBox, QLineEdit
 from pytestqt.qtbot import QtBot
 
-from llamagui.config_yaml import ConfigYaml
 from llamagui.gui.pages.models import ModelsPage
+from llamagui.gui.pages.server_args import ServerArgsPage, _PathEdit
 from llamagui.gui.pages.settings import SettingsPage
-from llamagui.gui.widgets.model_table import ModelTable
+from llamagui.gui.widgets.model_table import ModelTable, _format_size
 
 
-class TestConfigYaml:
-    def test_load_missing(self, tmp_path: Path) -> None:
-        cfg = ConfigYaml(tmp_path / "config.yaml")
-        cfg.load()
-        assert cfg.get_models() == []
+def _item_text(table: ModelTable, row: int, col: int) -> str:
+    item = table.item(row, col)
+    assert item is not None
+    return item.text()
 
-    def test_save_and_round_trip(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.yaml"
-        cfg = ConfigYaml(path)
-        cfg.data["active"] = "vulkan"
-        cfg.data["models"] = [
-            {"id": "test", "cmd": "llama-server", "group": "", "flags": []},
-        ]
-        cfg.save()
 
-        cfg2 = ConfigYaml(path)
-        cfg2.load()
-        assert cfg2.get_active() == "vulkan"
-        models = cfg2.get_models()
-        assert len(models) == 1
-        assert models[0]["id"] == "test"
-
-    def test_add_remove_model(self, tmp_path: Path) -> None:
-        cfg = ConfigYaml(tmp_path / "config.yaml")
-        cfg.load()
-        cfg.add_model({"id": "m1", "cmd": "/usr/bin/llama-server"})
-        cfg.add_model({"id": "m2", "cmd": "/usr/local/bin/llama-server"})
-        assert len(cfg.get_models()) == 2
-
-        cfg.remove_model(0)
-        models = cfg.get_models()
-        assert len(models) == 1
-        assert models[0]["id"] == "m2"
-
-    def test_update_model(self, tmp_path: Path) -> None:
-        cfg = ConfigYaml(tmp_path / "config.yaml")
-        cfg.load()
-        cfg.add_model({"id": "m1", "cmd": "old"})
-        cfg.update_model(0, {"id": "m1", "cmd": "new"})
-        assert cfg.get_models()[0]["cmd"] == "new"
-
-    def test_set_active(self, tmp_path: Path) -> None:
-        cfg = ConfigYaml(tmp_path / "config.yaml")
-        cfg.load()
-        assert cfg.get_active() is None
-        cfg.set_active("cuda12")
-        assert cfg.get_active() == "cuda12"
+def _set_row_value(page: ServerArgsPage, flag: str, value: str) -> None:
+    """Set ``value`` on the editor row for ``flag``, whatever its widget kind."""
+    for arg, editor in page._rows:
+        if arg.flag != flag:
+            continue
+        if isinstance(editor, QComboBox):
+            index = editor.findText(value)
+            if index >= 0:
+                editor.setCurrentIndex(index)
+        elif isinstance(editor, _PathEdit):
+            editor.setValue(value)
+        elif isinstance(editor, QLineEdit):
+            editor.setText(value)
+        return
 
 
 class TestModelTable:
     def test_empty(self, qtbot: QtBot) -> None:
         mt = ModelTable()
-        mt.show()
         qtbot.addWidget(mt)
-        assert mt.get_models() == []
+        assert mt.rowCount() == 0
+        assert mt.selected_name() is None
 
-    def test_load_and_get(self, qtbot: QtBot) -> None:
+    def test_load_shows_rows_and_active(self, qtbot: QtBot) -> None:
         mt = ModelTable()
         qtbot.addWidget(mt)
         models: list[dict[str, Any]] = [
-            {"id": "a", "cmd": "cmd_a", "group": "g1", "flags": ["--flag1"]},
-            {"id": "b", "cmd": "cmd_b", "group": "", "flags": []},
+            {"name": "a.gguf", "size_bytes": 1024, "modified": "2026-01-01 00:00"},
+            {"name": "b.gguf", "size_bytes": 2048, "modified": "2026-01-02 00:00"},
         ]
-        mt.load_models(models)
-        result = mt.get_models()
-        assert len(result) == 2
-        assert result[0]["id"] == "a"
-        assert result[0]["flags"] == ["--flag1"]
-        assert result[1]["id"] == "b"
+        mt.load_models(models, active="b.gguf")
+        assert mt.rowCount() == 2
+        assert _item_text(mt, 0, 0) == "a.gguf"
+        assert _item_text(mt, 1, 0) == "b.gguf"
+        assert _item_text(mt, 0, 3) == ""
+        assert _item_text(mt, 1, 3) == "active"
 
-    def test_load_skips_empty_id(self, qtbot: QtBot) -> None:
+    def test_selected_name(self, qtbot: QtBot) -> None:
         mt = ModelTable()
         qtbot.addWidget(mt)
-        mt.load_models([{"id": "", "cmd": "x"}, {"id": "valid", "cmd": "y"}])
-        result = mt.get_models()
-        assert len(result) == 1
+        mt.load_models(
+            [
+                {"name": "a.gguf", "size_bytes": 1, "modified": ""},
+                {"name": "b.gguf", "size_bytes": 2, "modified": ""},
+            ]
+        )
+        mt.selectRow(1)
+        assert mt.selected_name() == "b.gguf"
 
-    def test_get_models_after_edit(self, qtbot: QtBot) -> None:
-        mt = ModelTable()
-        qtbot.addWidget(mt)
-        mt.load_models([{"id": "x", "cmd": "cmd_x", "group": "", "flags": []}])
-        items = mt.get_models()
-        assert len(items) == 1
-        assert items[0]["id"] == "x"
+
+class TestFormatSize:
+    def test_units(self) -> None:
+        assert _format_size(512) == "512 B"
+        assert _format_size(2048) == "2.0 KB"
+        assert _format_size(5 * 1024 * 1024) == "5.0 MB"
+        assert _format_size(1536 * 1024 * 1024) == "1.5 GB"
 
 
 class TestModelsPage:
-    def test_creates(self, qtbot: QtBot, fake_orch: MagicMock, tmp_path: Path) -> None:
-        cfg_path = tmp_path / "config.yaml"
-        page = ModelsPage(fake_orch, cfg_path)
+    def test_creates(self, qtbot: QtBot, fake_orch: MagicMock) -> None:
+        page = ModelsPage(fake_orch)
         qtbot.addWidget(page)
         assert page._table is not None
-        assert page._active_label is not None
+        assert page._dir_label is not None
+        assert page._server_label is not None
+
+    def test_on_list_renders_models(self, qtbot: QtBot, fake_orch: MagicMock) -> None:
+        page = ModelsPage(fake_orch)
+        qtbot.addWidget(page)
+        page._on_list(
+            {
+                "dir": "/models",
+                "models": [{"name": "a.gguf", "size_bytes": 10, "modified": "now"}],
+                "active": "a.gguf",
+            }
+        )
+        assert page._table.rowCount() == 1
+        assert _item_text(page._table, 0, 0) == "a.gguf"
 
 
 class TestSettingsPage:
@@ -113,17 +104,35 @@ class TestSettingsPage:
         qtbot.addWidget(page)
         assert page._root_picker is not None
 
-    def test_collect_round_trips_pointed_paths(
+    def test_collect_round_trips_os_toggle(
         self, qtbot: QtBot, fake_orch: MagicMock
     ) -> None:
         page = SettingsPage(fake_orch)
         qtbot.addWidget(page)
-        page._pointed_server.setText("/opt/llama/llama-server")
-        page._pointed_swap.setText("/opt/llama/llama-swap")
+        page._os_llama_check.setChecked(True)
 
         collected = page.collect()
-        assert collected["pointed"]["llama_server"] == "/opt/llama/llama-server"
-        assert collected["pointed"]["llama_swap"] == "/opt/llama/llama-swap"
+        assert collected["use_os_llama_server"] is True
+        # The legacy pointed-path model is gone from the settings form.
+        assert "pointed" not in collected
+        assert "source_priority" not in collected
+
+    def test_collect_includes_server_options(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        page = ServerArgsPage(fake_orch)
+        qtbot.addWidget(page)
+
+        _set_row_value(page, "--ctx-size", "8192")
+        _set_row_value(page, "--n-gpu-layers", "33")
+        _set_row_value(page, "__extra_args__", "--threads 8")
+
+        collected = page.collect()
+        # ServerArgsPage returns dedicated fields separately
+        assert collected["ctx_size"] == 8192
+        assert collected["n_gpu_layers"] == 33
+        assert collected["extra_server_args"] == "--threads 8"
+        assert "listen_flag" not in collected
 
     def test_save_persists_through_the_orchestrator(
         self, qtbot: QtBot, fake_orch: MagicMock
@@ -136,5 +145,5 @@ class TestSettingsPage:
         saved = fake_orch.save_config.call_args.args[0]
         assert saved["port"] == 9099
         # Unrelated settings travel with the save so nothing is dropped.
-        assert "pointed" in saved
-        assert "source_priority" in saved
+        assert "use_os_llama_server" in saved
+        assert "pointed" not in saved

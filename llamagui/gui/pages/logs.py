@@ -22,12 +22,12 @@ class LogsPage(QWidget):
         layout = QVBoxLayout(self)
 
         title = QLabel("Logs")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         self._tabs = QTabWidget()
-        self._out_view = LogView(state_dir / "llama-swap.out.log")
-        self._err_view = LogView(state_dir / "llama-swap.err.log")
+        self._out_view = LogView(state_dir / "llama-server.out.log")
+        self._err_view = LogView(state_dir / "llama-server.err.log")
         self._tabs.addTab(self._out_view, "stdout")
         self._tabs.addTab(self._err_view, "stderr")
         layout.addWidget(self._tabs)

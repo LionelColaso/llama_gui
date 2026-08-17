@@ -23,8 +23,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...config import CUDA_RUNTIME_MODES, INSTALL_SOURCES
+from ...config import CUDA_RUNTIME_MODES
 from ..payload import as_payload
+from ..theme import COLORS
 from ..token import delete_token, get_token, set_token
 from ..widgets.path_picker import PathPicker
 
@@ -39,11 +40,11 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(self)
 
         title = QLabel("Settings")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         self._config_path_label = QLabel()
-        self._config_path_label.setStyleSheet("color: #757575;")
+        self._config_path_label.setStyleSheet(f"color: {COLORS['muted']};")
         self._config_path_label.setWordWrap(True)
         layout.addWidget(self._config_path_label)
 
@@ -95,9 +96,6 @@ class SettingsPage(QWidget):
         self._port_spin.setRange(1, 65535)
         form.addRow("Port", self._port_spin)
 
-        self._listen_check = QCheckBox("Pass --listen host:port to llama-swap")
-        form.addRow("Listen flag", self._listen_check)
-
         self._backend_combo = QComboBox()
         self._backend_combo.addItems(self._orch.backend_names())
         form.addRow("Default backend", self._backend_combo)
@@ -107,42 +105,33 @@ class SettingsPage(QWidget):
         form.addRow("Theme", self._theme_combo)
 
         self._launch_check = QCheckBox()
-        form.addRow("Launch router on start", self._launch_check)
+        form.addRow("Launch server on start", self._launch_check)
 
         self._minimized_check = QCheckBox()
         form.addRow("Start minimized to tray", self._minimized_check)
         return group
 
     def _build_paths_group(self) -> QGroupBox:
-        group = QGroupBox("Binary locations")
+        group = QGroupBox("Paths")
         form = QFormLayout(group)
 
-        self._priority_edit = QLineEdit()
-        self._priority_edit.setPlaceholderText("pointed, managed, system")
-        form.addRow("Source priority", self._priority_edit)
-
-        self._pointed_folder = PathPicker(
+        self._models_dir_picker = PathPicker(
             mode="directory",
-            caption="Folder containing llama-server / llama-swap",
-            placeholder="Optional: a folder holding both binaries",
+            caption="Choose models directory",
+            placeholder="Where .gguf files live",
         )
-        form.addRow("Pointed folder", self._pointed_folder)
+        form.addRow("Models directory", self._models_dir_picker)
 
-        self._pointed_server = PathPicker(
-            caption="Select llama-server",
-            placeholder="Optional: full path to llama-server",
+        self._backend_location_label = QLabel()
+        self._backend_location_label.setStyleSheet(f"color: {COLORS['muted']};")
+        form.addRow("Backend location", self._backend_location_label)
+
+        self._os_llama_check = QCheckBox("Use OS installed llama.cpp")
+        self._os_llama_check.setToolTip(
+            "Prefer the llama-server found on PATH (OS install / package "
+            "manager) over the backend downloaded into the backend location."
         )
-        form.addRow("llama-server path", self._pointed_server)
-
-        self._pointed_swap = PathPicker(
-            caption="Select llama-swap",
-            placeholder="Optional: full path to llama-swap",
-        )
-        form.addRow("llama-swap path", self._pointed_swap)
-
-        self._install_source_combo = QComboBox()
-        self._install_source_combo.addItems(list(INSTALL_SOURCES))
-        form.addRow("Install source", self._install_source_combo)
+        form.addRow("", self._os_llama_check)
 
         self._cudart_combo = QComboBox()
         self._cudart_combo.addItems(list(CUDA_RUNTIME_MODES))
@@ -173,16 +162,13 @@ class SettingsPage(QWidget):
         self._root_picker.setText(cfg.root)
         self._host_edit.setText(cfg.host)
         self._port_spin.setValue(cfg.port)
-        self._listen_check.setChecked(bool(cfg.listen_flag))
         self._backend_combo.setCurrentText(cfg.default_backend)
         self._theme_combo.setCurrentText(cfg.theme)
         self._launch_check.setChecked(cfg.launch_on_start)
         self._minimized_check.setChecked(cfg.start_minimized)
-        self._priority_edit.setText(", ".join(cfg.source_priority))
-        self._pointed_folder.setText(cfg.pointed.folder)
-        self._pointed_server.setText(cfg.pointed.llama_server)
-        self._pointed_swap.setText(cfg.pointed.llama_swap)
-        self._install_source_combo.setCurrentText(cfg.install_source)
+        self._models_dir_picker.setText(cfg.models_dir)
+        self._backend_location_label.setText(f"{cfg.managed_dir} (downloads)")
+        self._os_llama_check.setChecked(cfg.use_os_llama_server)
         self._cudart_combo.setCurrentText(cfg.bundle_cuda_runtime)
         self._auto_update_check.setChecked(cfg.auto_update)
         self._interval_spin.setValue(cfg.auto_update_interval_hours)
@@ -201,26 +187,22 @@ class SettingsPage(QWidget):
         return str(config_file())
 
     def collect(self) -> dict[str, Any]:
-        """Return the form contents as a settings dict."""
-        priority = [
-            p.strip() for p in self._priority_edit.text().split(",") if p.strip()
-        ]
+        """Return the form contents as a settings dict.
+
+        Launch flags (``-c`` / ``-ngl`` / extra args and the whole llama-server
+        option set) are edited on the **Server options** page; this page only
+        touches app-level settings plus ``host``/``port``.
+        """
         return {
             "root": self._root_picker.text() or self._orch.cfg.root,
             "host": self._host_edit.text().strip() or "127.0.0.1",
             "port": self._port_spin.value(),
-            "listen_flag": "--listen" if self._listen_check.isChecked() else "",
             "default_backend": self._backend_combo.currentText(),
             "theme": self._theme_combo.currentText(),
             "launch_on_start": self._launch_check.isChecked(),
             "start_minimized": self._minimized_check.isChecked(),
-            "source_priority": priority or list(self._orch.cfg.source_priority),
-            "pointed": {
-                "folder": self._pointed_folder.value(),
-                "llama_server": self._pointed_server.value(),
-                "llama_swap": self._pointed_swap.value(),
-            },
-            "install_source": self._install_source_combo.currentText(),
+            "models_dir": self._models_dir_picker.text() or self._orch.cfg.models_dir,
+            "use_os_llama_server": self._os_llama_check.isChecked(),
             "bundle_cuda_runtime": self._cudart_combo.currentText(),
             "auto_update": self._auto_update_check.isChecked(),
             "auto_update_interval_hours": self._interval_spin.value(),
@@ -244,13 +226,7 @@ class SettingsPage(QWidget):
             return
         data = as_payload(resolved)
         self._status_label.setText(
-            "\n".join(
-                _format_resolution(label, data.get(key, {}))
-                for label, key in (
-                    ("llama-server", "llama_server"),
-                    ("llama-swap", "llama_swap"),
-                )
-            )
+            _format_resolution("llama-server", data.get("llama_server", {}))
         )
 
     def _clear_token(self) -> None:

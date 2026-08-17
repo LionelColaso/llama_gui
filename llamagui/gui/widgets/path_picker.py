@@ -1,4 +1,4 @@
-"""Reusable "path + Browse" row used by the Settings and Resolver pages."""
+"""Reusable "path + Browse" row used by the Settings and Backends sections."""
 
 from __future__ import annotations
 

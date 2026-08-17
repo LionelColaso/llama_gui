@@ -8,16 +8,18 @@ status (§9.2), so scripts and the GUI can react without parsing text.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
+from loguru import logger
 from pydantic import BaseModel
 
-from .backends.build import ToolchainMissing
 from .backends.prebuilt import PrebuiltError, PrebuiltUnavailable
 from .config import AppConfig
 from .orchestrator import Orchestrator
@@ -50,6 +52,16 @@ def build_env(
 
 
 def emit(env: Envelope, use_json: bool) -> int:
+    if env.error:
+        logger.error(
+            "cli action '{}' failed (exit {}): {}", env.action, env.exit_code, env.error
+        )
+    elif env.warnings:
+        logger.warning(
+            "cli action '{}' warnings: {}", env.action, "; ".join(env.warnings)
+        )
+    else:
+        logger.debug("cli action '{}' ok (exit {})", env.action, env.exit_code)
     if use_json:
         sys.stdout.write(env.model_dump_json(indent=2) + "\n")
         return env.exit_code
@@ -67,6 +79,7 @@ def emit(env: Envelope, use_json: bool) -> int:
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
+        logger.error("cli argument error: {}", message)
         use_json = "--json" in sys.argv
         env = build_env("", False, ExitCode.BAD_ARGUMENT, error=message)
         if use_json:
@@ -104,15 +117,6 @@ def _build_parser() -> _Parser:
         child = add(name, help_text)
         child.add_argument("backends", nargs="*", default=None)
         child.add_argument("--force", action="store_true")
-        child.add_argument(
-            "--source",
-            choices=("prebuilt", "build"),
-            default=None,
-            help="Override the configured install source",
-        )
-
-    build_p = add("build", "Build backends from the vendored submodules")
-    build_p.add_argument("backends", nargs="*", default=None)
 
     use_p = add("use", "Switch the active backend")
     use_p.add_argument("backend")
@@ -121,13 +125,38 @@ def _build_parser() -> _Parser:
     add("stop", "Stop everything this app launched")
 
     for name, help_text in (
-        ("launch", "Launch llama-swap"),
-        ("restart", "Stop, then launch llama-swap"),
+        ("launch", "Launch llama-server with the active model"),
+        ("restart", "Stop, then launch llama-server"),
     ):
         child = add(name, help_text)
         child.add_argument("--verify", action="store_true", help="Wait for the port")
 
+    add("list-models", "List the .gguf models in the models directory")
+
+    dl_p = add("download-model", "Download a .gguf model by URL")
+    dl_p.add_argument("url")
+
+    set_p = add("set-model", "Set the active model (by file name)")
+    set_p.add_argument("name")
+
+    rm_p = add("remove-model", "Remove a model from the models directory")
+    rm_p.add_argument("name")
+
     add("list-assets", "List the assets of the latest release")
+
+    server_args_p = add(
+        "server-args", "List every llama-server option with its current value"
+    )
+    server_args_p.add_argument("--flag", default=None, help="Only one option")
+
+    set_arg_p = add(
+        "set-arg", "Set one llama-server option (empty value resets it to default)"
+    )
+    set_arg_p.add_argument("flag", help="Flag or alias, e.g. --top-k or -t")
+    set_arg_p.add_argument("value", nargs="?", default="")
+
+    add("clear-args", "Reset every llama-server option to its default")
+
     add("gui", "Launch the desktop app")
     return parser
 
@@ -145,24 +174,50 @@ def _dispatch(orch: Orchestrator, args: argparse.Namespace) -> Any:
     if action == "bootstrap":
         return orch.bootstrap(args.backend, args.force)
     if action == "install":
-        return orch.install(args.backends or None, args.force, args.source)
+        return orch.install(args.backends or None, args.force)
     if action == "update":
-        return orch.update(args.backends or None, args.force, args.source)
-    if action == "build":
-        return orch.build(args.backends or None)
+        return orch.update(args.backends or None, args.force)
     if action == "use":
         return orch.use(args.backend, args.auto_install)
+    if action == "list-models":
+        return orch.list_models()
+    if action == "download-model":
+        return orch.download_model(args.url)
+    if action == "set-model":
+        return orch.set_active_model(args.name)
+    if action == "remove-model":
+        return orch.remove_model(args.name)
     if action == "stop":
         return orch.stop()
     if action == "list-assets":
         return orch.list_assets()
+    if action == "server-args":
+        return orch.describe_server_args(args.flag)
+    if action == "set-arg":
+        return orch.set_server_arg(args.flag, args.value)
+    if action == "clear-args":
+        return orch.clear_server_args()
     raise EngineError(ExitCode.BAD_ARGUMENT, f"Unknown action: {action}")
+
+
+def _force_utf8_stdio() -> None:
+    """Make the JSON envelope byte-safe on any console code page.
+
+    A piped stdout on Windows defaults to the ANSI code page (cp1252); writing
+    the envelope (arbitrary UTF-8 in model names and errors) to it would crash
+    with ``UnicodeEncodeError``. The contract is UTF-8 regardless of locale.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            with suppress(ValueError, OSError):
+                stream.reconfigure(encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
+    _force_utf8_stdio()
     use_json = "--json" in argv
     args = _build_parser().parse_args(argv)
 
@@ -192,16 +247,6 @@ def main(argv: list[str] | None = None) -> int:
             int(e.exit_code),
             error=str(e),
             log_tail=e.log_tail,
-            warnings=warnings,
-            root=root_str,
-        )
-        return emit(env, use_json)
-    except ToolchainMissing as e:
-        env = build_env(
-            args.action,
-            False,
-            ExitCode.TOOLCHAIN_MISSING,
-            error=str(e),
             warnings=warnings,
             root=root_str,
         )
@@ -258,7 +303,7 @@ def _run_launch(orch: Orchestrator, args: argparse.Namespace) -> dict[str, Any]:
     if args.verify and pid is None:
         raise EngineError(
             ExitCode.NOT_AVAILABLE,
-            "llama-swap did not start listening on the configured port",
+            "llama-server did not start listening on the configured port",
             orch.log_tail(20),
         )
     return {"pid": pid}

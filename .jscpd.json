@@ -9,6 +9,7 @@
     "**/*.lock",
     "**/resources/**",
     "**/vendor/**",
-    "**/*.md"
+    "**/*.md",
+    "**/docs/reference/**"
   ]
 }

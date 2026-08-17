@@ -1,9 +1,0 @@
-[submodule "vendor/llama.cpp"]
-	path = vendor/llama.cpp
-	url = https://github.com/ggml-org/llama.cpp.git
-	shallow = true
-
-[submodule "vendor/llama-swap"]
-	path = vendor/llama-swap
-	url = https://github.com/mostlygeek/llama-swap.git
-	shallow = true
