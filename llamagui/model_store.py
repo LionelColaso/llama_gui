@@ -171,7 +171,10 @@ def _stream_download(
             if length and length.isdigit():
                 size_total = offset + int(length)
 
-        emit_progress("model", offset, size_total, "download")
+        def _overall(d: int) -> float | None:
+            return (d / size_total) if size_total else None
+
+        emit_progress("model", offset, size_total, "download", _overall(offset))
         done = offset
         with part_path.open(mode, buffering=1024 * 1024) as handle:
             for chunk in response.iter_bytes(1024 * 1024):
@@ -179,7 +182,7 @@ def _stream_download(
                     continue
                 handle.write(chunk)
                 done += len(chunk)
-                emit_progress("model", done, size_total, "download")
+                emit_progress("model", done, size_total, "download", _overall(done))
     return done, size_total
 
 

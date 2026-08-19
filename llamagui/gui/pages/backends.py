@@ -257,6 +257,7 @@ class BackendsPage(QWidget):
             "install",
             f"Installing {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
             backends=[name],
         )
 
@@ -265,6 +266,7 @@ class BackendsPage(QWidget):
             "update",
             f"Updating {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
             backends=[name],
         )
 
@@ -273,6 +275,7 @@ class BackendsPage(QWidget):
             "use",
             f"Switching to {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
             backend=name,
             auto_install=True,
         )
@@ -363,8 +366,10 @@ class BackendsPage(QWidget):
 
     # ─── Signals ───────────────────────────────────────────────────────────
 
-    def _on_progress(self, done: int, total: int, phase: str) -> None:
-        self._progress.update_progress(done, total, phase)
+    def _on_progress(
+        self, done: int, total: int, phase: str, overall: float | None = None
+    ) -> None:
+        self._progress.update_progress(done, total, phase, overall)
 
     def _on_status_error(self, msg: str) -> None:
         self._busy = False

@@ -187,8 +187,10 @@ class ModelsPage(QWidget):
 
     # ─── Signals ─────────────────────────────────────────────────────────
 
-    def _on_progress(self, done: int, total: int, phase: str) -> None:
-        self._progress.update_progress(done, total, phase)
+    def _on_progress(
+        self, done: int, total: int, phase: str, overall: float | None = None
+    ) -> None:
+        self._progress.update_progress(done, total, phase, overall)
 
     def _on_downloaded(self, data: Any) -> None:
         self._progress.finish_operation()

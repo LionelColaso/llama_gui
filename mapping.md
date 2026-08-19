@@ -75,6 +75,7 @@ llama_gui/
 │   │   ├── test_dashboard.py
 │   │   ├── test_main_window.py
 │   │   ├── test_phase7.py
+│   │   ├── test_progress_widget.py
 │   │   └── test_worker_progress_threading.py
 │   ├── integration/
 │   │   ├── __init__.py

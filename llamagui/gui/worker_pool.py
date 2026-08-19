@@ -15,7 +15,10 @@ class WorkerSignals(QObject):
 
     finished = Signal(object)  # (result_data)
     error = Signal(str)  # (error_message)
-    progress = Signal(int, int, str)  # (done, total, phase)
+    # (done, total, phase, overall) — ``overall`` is the fraction of the whole
+    # operation done, or ``None`` when unknown (e.g. a download with no
+    # Content-Length). The 4th arg is ``object`` so ``None`` survives the emit.
+    progress = Signal(int, int, str, object)
 
 
 class EngineWorker(QRunnable):
@@ -95,9 +98,11 @@ class EngineWorker(QRunnable):
                 with contextlib.suppress(RuntimeError):
                     self.signals.progress.disconnect(self._progress_callback)
 
-    def _forward_progress(self, done: int, total: int, phase: str) -> None:
+    def _forward_progress(
+        self, done: int, total: int, phase: str, overall: float | None = None
+    ) -> None:
         """Global-callback trampoline: hand the tick to the Qt signal."""
-        self.signals.progress.emit(done, total, phase)
+        self.signals.progress.emit(done, total, phase, overall)
 
     def run_sync(self) -> None:
         """Synchronous fallback used when ``orch`` is a MagicMock (tests)."""
