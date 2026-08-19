@@ -263,6 +263,43 @@ def test_unsupported_archive_format(tmp_path: Path) -> None:
         wipe_and_extract(bogus, tmp_path / "dest")
 
 
+def test_wipe_and_extract_emits_byte_progress(tmp_path: Path) -> None:
+    # Regression: extraction must report real, moving byte progress (not a
+    # frozen bar) and map it into the caller's overall window.
+    import llamagui.backends.prebuilt as pb
+
+    archive = tmp_path / "release.zip"
+    _make_zip(
+        archive,
+        {
+            "a.dll": b"x" * 1000,
+            "b.dll": b"y" * 2000,
+            "c.dll": b"z" * 3000,
+        },
+    )
+    dest = tmp_path / "vulkan"
+    events: list[tuple[str, int, int, float]] = []
+
+    def _cb(done: int, total: int, phase: str, overall: float | None) -> None:
+        events.append((phase, done, total, overall if overall is not None else 0.0))
+
+    pb.set_progress_callback(_cb)
+    try:
+        pb.wipe_and_extract(
+            archive, dest, component="vulkan", overall_range=(0.5, 0.75)
+        )
+    finally:
+        pb.set_progress_callback(None)
+
+    assert (dest / "a.dll").read_bytes() == b"x" * 1000
+    assert events, "expected extract progress events"
+    assert all(e[0] == "extract" for e in events)
+    assert all(e[2] == 6000 for e in events)  # total = 1000 + 2000 + 3000
+    assert all(0.5 <= e[3] <= 0.75 for e in events)  # within the window
+    assert events[-1][1] == 6000  # finished at the byte total
+    assert events[-1][3] == 0.75  # reached the window's top
+
+
 # ─── Download cache ───────────────────────────────────────────────────────
 
 
@@ -409,6 +446,7 @@ def test_download_emits_progress_without_content_length(tmp_path: Path) -> None:
         captured.append(args)
 
     class _Resp:
+        status_code: ClassVar[int] = 200  # full (non-range) 200 response
         headers: ClassVar[dict[str, str]] = {}  # no content-length
 
         def raise_for_status(self) -> None:
@@ -432,5 +470,9 @@ def test_download_emits_progress_without_content_length(tmp_path: Path) -> None:
 
     assert (tmp_path / "out.bin").read_bytes() == b"hello world"
     assert captured, "expected progress events even without Content-Length"
+    # emit_progress is mocked, so it forwards its full (component, done, total,
+    # phase, overall) tuple. total is unknown (0); overall is None without a
+    # Content-Length; the final tick's done equals the full payload size.
     assert all(c[2] == 0 for c in captured)  # total is unknown (0)
+    assert all(c[4] is None for c in captured)  # no overall without Content-Length
     assert captured[-1][1] == len(b"hello world")  # final done == full size

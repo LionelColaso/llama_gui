@@ -15,7 +15,10 @@ class WorkerSignals(QObject):
 
     finished = Signal(object)  # (result_data)
     error = Signal(str)  # (error_message)
-    progress = Signal(int, int, str)  # (done, total, phase)
+    # (done, total, phase, overall) — ``overall`` is the fraction of the whole
+    # operation done, or ``None`` when unknown (e.g. a download with no
+    # Content-Length). The 4th arg is ``object`` so ``None`` survives the emit.
+    progress = Signal(int, int, str, object)
 
 
 class EngineWorker(QRunnable):
@@ -34,6 +37,7 @@ class EngineWorker(QRunnable):
         orch: Orchestrator,
         action: str,
         progress_callback: Any = None,
+        control: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -41,6 +45,7 @@ class EngineWorker(QRunnable):
         self._action = action
         self._kwargs = kwargs
         self._progress_callback = progress_callback
+        self._control = control
         self.signals = WorkerSignals()
 
     def _execute_action(self) -> None:
@@ -76,6 +81,7 @@ class EngineWorker(QRunnable):
         # Wire the global progress callback *before* running the action so
         # that httpx-download / extract progress is forwarded to the GUI.
         from ..backends.prebuilt import set_progress_callback
+        from ..download import set_download_control
 
         if self._progress_callback is not None:
             # Signal connection (not a direct call): the emit happens on this
@@ -85,19 +91,23 @@ class EngineWorker(QRunnable):
         set_progress_callback(
             self._forward_progress if self._progress_callback is not None else None
         )
+        set_download_control(self._control)
         try:
             self._execute_action()
         finally:
             set_progress_callback(None)
+            set_download_control(None)
             if self._progress_callback is not None:
                 # The C++ signal object may already be destroyed when the app
                 # quits mid-download (same deleted-receiver race as _emit).
                 with contextlib.suppress(RuntimeError):
                     self.signals.progress.disconnect(self._progress_callback)
 
-    def _forward_progress(self, done: int, total: int, phase: str) -> None:
+    def _forward_progress(
+        self, done: int, total: int, phase: str, overall: float | None = None
+    ) -> None:
         """Global-callback trampoline: hand the tick to the Qt signal."""
-        self.signals.progress.emit(done, total, phase)
+        self.signals.progress.emit(done, total, phase, overall)
 
     def run_sync(self) -> None:
         """Synchronous fallback used when ``orch`` is a MagicMock (tests)."""

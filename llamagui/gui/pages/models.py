@@ -8,6 +8,7 @@ the CLI stay on the same code path.
 from __future__ import annotations
 
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -20,10 +21,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...download import resumable_tasks
 from ..payload import as_payload
 from ..theme import COLORS
+from ..widgets.download_runner import DownloadActionMixin
 from ..widgets.model_table import ModelTable
-from ..widgets.progress_bar import ProgressWidget
+from ..widgets.progress_bar import ProgressWidget, _human
 from ..worker_pool import EngineWorker, WorkerPool
 
 
@@ -31,7 +34,7 @@ def _ignore_error(msg: str) -> None:
     """Swallow the message; resolve errors are surfaced on the Backends section."""
 
 
-class ModelsPage(QWidget):
+class ModelsPage(DownloadActionMixin, QWidget):
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orch = orch
@@ -78,6 +81,30 @@ class ModelsPage(QWidget):
 
         self._load()
         self._show_server_path()
+        self._offer_resume()
+
+    def _offer_resume(self) -> None:
+        """Prompt to resume any model download left unfinished by a prior run."""
+        try:
+            models_dir = Path(self._orch.cfg.models_dir_path)
+        except Exception:  # noqa: BLE001 - resume is best-effort, never fatal
+            return
+        for task in resumable_tasks(models_dir):
+            url = task.get("url")
+            if not url:
+                continue
+            size = _human(task["total"]) if task.get("total") else "unknown size"
+            answer = QMessageBox.question(
+                self,
+                "Resume download",
+                f"An interrupted model download was found ({size}). Resume it?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                continue
+            self._start_download_worker(
+                url, status_text=f"Resuming {url.rsplit('/', 1)[-1]}…"
+            )
+            break
 
     # ─── Loading ─────────────────────────────────────────────────────────
 
@@ -130,16 +157,9 @@ class ModelsPage(QWidget):
         url = url.strip()
         if not url:
             return
-        self._progress.start_operation(f"Downloading {url.rsplit('/', 1)[-1]}…")
-        worker = EngineWorker(
-            self._orch,
-            "download_model",
-            progress_callback=self._on_progress,
-            url=url,
+        self._start_download_worker(
+            url, status_text=f"Downloading {url.rsplit('/', 1)[-1]}…"
         )
-        worker.signals.finished.connect(self._on_downloaded)
-        worker.signals.error.connect(self._on_download_error)
-        WorkerPool.instance().start(worker)
 
     def _do_set_active(self) -> None:
         name = self._table.selected_name()
@@ -187,9 +207,6 @@ class ModelsPage(QWidget):
 
     # ─── Signals ─────────────────────────────────────────────────────────
 
-    def _on_progress(self, done: int, total: int, phase: str) -> None:
-        self._progress.update_progress(done, total, phase)
-
     def _on_downloaded(self, data: Any) -> None:
         self._progress.finish_operation()
         payload = as_payload(data)
@@ -198,10 +215,6 @@ class ModelsPage(QWidget):
             f"({payload.get('size_bytes', 0)} bytes)."
         )
         self._load()
-
-    def _on_download_error(self, msg: str) -> None:
-        self._progress.fail_operation("Failed")
-        self._status_label.setText(f"Download failed: {msg}")
 
     def _on_error(self, msg: str) -> None:
         with suppress(RuntimeError):

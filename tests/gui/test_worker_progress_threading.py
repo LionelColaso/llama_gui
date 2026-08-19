@@ -36,7 +36,7 @@ def test_progress_slot_runs_on_gui_thread(qtbot: QtBot) -> None:
     released = threading.Event()
     off_thread: list[str] = []
 
-    def slot(done: int, total: int, phase: str) -> None:
+    def slot(done: int, total: int, phase: str, overall: float | None) -> None:
         if threading.current_thread() is not main_thread:
             off_thread.append(phase)
         released.set()

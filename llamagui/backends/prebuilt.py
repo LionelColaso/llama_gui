@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from ..download import DownloadCancelled, DownloadError, stream_download
 from ..models import Backend, backend_availability, get_backend
 from ..paths import (
     clear_quarantine,
@@ -64,7 +65,7 @@ def _cudart_pattern(entry: Backend, mode: str) -> str | None:
 
 # ─── GUI progress callback ────────────────────────────────────────────────
 
-ProgressCallback = Callable[[int, int, str], None]
+ProgressCallback = Callable[[int, int, str, float | None], None]
 _progress_callback: ProgressCallback | None = None
 
 
@@ -74,22 +75,58 @@ def set_progress_callback(cb: ProgressCallback | None) -> None:
 
 
 def emit_progress(
-    component: str, bytes_done: int, bytes_total: int, phase: str
+    component: str,
+    bytes_done: int,
+    bytes_total: int,
+    phase: str,
+    overall: float | None = None,
 ) -> None:
     if _progress_callback is None:
         # CLI mode: the PROGRESS line protocol on stderr is the progress
-        # channel (parsed via models.parse_progress_line).
+        # channel (parsed via models.parse_progress_line). The optional
+        # ``overall`` fraction is GUI-only and is intentionally omitted here
+        # so the stable 4-field line protocol is preserved.
         print(
             f"PROGRESS\t{component}\t{bytes_done}\t{bytes_total}\t{phase}",
             file=sys.stderr,
         )
     else:
         # GUI mode: the worker forwards the tick over its Qt signal; no
-        # stderr spam for a terminal that merely hosts the GUI.
-        _progress_callback(bytes_done, bytes_total, phase)
+        # stderr spam for a terminal that merely hosts the GUI. ``overall``
+        # (when known) is the fraction of the *whole* operation done so far,
+        # so multi-phase work (download → extract → cudart) renders as one
+        # continuous bar instead of several 0→100% segments.
+        _progress_callback(bytes_done, bytes_total, phase, overall)
 
 
-# ─── GitHub API ───────────────────────────────────────────────────────────
+class _ExtractProgress:
+    """Counts extracted bytes so extraction shows a real, moving bar.
+
+    The total is filled in by the extractor once it has enumerated the archive
+    members (so it can sum their sizes); each written file calls :meth:`add`
+    with its byte count. ``overall`` maps that into the caller's window so the
+    extract phase lines up with the surrounding download/extract stages.
+    """
+
+    def __init__(self, component: str, overall_range: tuple[float, float]) -> None:
+        self.component = component
+        self.lo, self.hi = overall_range
+        self.total = 0
+        self.done = 0
+
+    def set_total(self, total: int) -> None:
+        self.total = total
+
+    def add(self, n: int) -> None:
+        self.done += n
+        overall = (
+            self.lo + (self.done / self.total) * (self.hi - self.lo)
+            if self.total > 0
+            else self.hi
+        )
+        emit_progress(self.component, self.done, self.total, "extract", overall)
+
+    # ─── GitHub API x ──────────────────────────────────────────────────────────
 
 
 @functools.lru_cache(maxsize=32)
@@ -132,28 +169,21 @@ def download_file(
     token: str | None = None,
     *,
     component: str = "download",
-) -> None:
-    headers: dict[str, str] = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> Path:
     try:
-        with httpx.stream(
-            "GET", url, headers=headers, timeout=120.0, follow_redirects=True
-        ) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", "0") or 0)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            done = 0
-            with dest.open("wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-                    done += len(chunk)
-                    # Always emit so the GUI shows movement; when the server
-                    # omits Content-Length (total == 0) the bar renders
-                    # indeterminate rather than frozen.
-                    emit_progress(component, done, total, "download")
-    except httpx.HTTPError as e:
-        raise PrebuiltError(f"Download failed: {e}") from e
+        return stream_download(
+            url,
+            dest,
+            auth_token=token,
+            component=component,
+            overall_range=overall_range,
+            emit=emit_progress,
+        )
+    except DownloadCancelled as e:
+        raise PrebuiltError(f"Download cancelled: {url}") from e
+    except DownloadError as e:
+        raise PrebuiltError(str(e)) from e
 
 
 def cached_download(
@@ -163,15 +193,19 @@ def cached_download(
     token: str | None = None,
     *,
     component: str = "download",
+    overall_range: tuple[float, float] = (0.0, 1.0),
 ) -> Path:
     """Download ``url`` unless a cached file of exactly ``size`` bytes exists."""
     name = url.rsplit("/", 1)[-1]
     cache_path = cache_dir / name
+    lo, hi = overall_range
     if cache_path.exists() and cache_path.stat().st_size == size:
-        emit_progress(component, size, size, "cache hit")
+        emit_progress(component, size, size, "cache hit", hi)
         return cache_path
-    emit_progress(component, 0, size, "download")
-    download_file(url, cache_path, token, component=component)
+    emit_progress(component, 0, size, "download", lo)
+    download_file(
+        url, cache_path, token, component=component, overall_range=overall_range
+    )
     if size and cache_path.stat().st_size != size:
         cache_path.unlink(missing_ok=True)
         raise PrebuiltError(f"Downloaded size mismatch for {name}")
@@ -243,12 +277,16 @@ def _write_symlink(target: Path, link_to: str) -> None:
         shutil.copy2(source, target)
 
 
-def _extract_tar(archive_path: Path, dest_dir: Path) -> None:
+def _extract_tar(
+    archive_path: Path, dest_dir: Path, prog: _ExtractProgress | None = None
+) -> None:
     with tarfile.open(archive_path, "r:gz") as tf:
         members = tf.getmembers()
         strip_top = _common_top_dir(
             _normalize(m.name).parts for m in members if not m.isdir()
         )
+        if prog is not None:
+            prog.set_total(sum(m.size for m in members if m.isfile()))
         # Regular files first so symlink targets already exist.
         for member in sorted(members, key=lambda m: m.issym() or m.islnk()):
             relative = _strip(_normalize(member.name), strip_top)
@@ -276,6 +314,8 @@ def _extract_tar(archive_path: Path, dest_dir: Path) -> None:
                 continue
             with src, target.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
+            if prog is not None:
+                prog.add(member.size)
             _apply_mode(target, member.mode)
 
 
@@ -286,12 +326,30 @@ def _zip_member_mode(info: zipfile.ZipInfo) -> int:
     return 0
 
 
-def _extract_zip(archive_path: Path, dest_dir: Path) -> None:
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    """True when a zip entry is a stored UNIX symlink (mode bits absent → no)."""
+    return info.create_system == 3 and stat.S_ISLNK(_zip_member_mode(info))
+
+
+def _extract_zip(
+    archive_path: Path, dest_dir: Path, prog: _ExtractProgress | None = None
+) -> None:
     with zipfile.ZipFile(archive_path, "r") as zf:
         infos = zf.infolist()
         strip_top = _common_top_dir(
             _normalize(i.filename).parts for i in infos if not i.is_dir()
         )
+        if prog is not None:
+            # Count every non-directory entry that is written as a regular file
+            # (i.e. not a stored UNIX symlink). This is robust to archives that
+            # carry no UNIX mode bits, where S_ISREG() would wrongly report 0.
+            prog.set_total(
+                sum(
+                    i.file_size
+                    for i in infos
+                    if not i.is_dir() and not _is_zip_symlink(i)
+                )
+            )
         for info in infos:
             relative = _strip(_normalize(info.filename), strip_top)
             if not relative.parts:
@@ -301,13 +359,14 @@ def _extract_zip(archive_path: Path, dest_dir: Path) -> None:
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            mode = _zip_member_mode(info)
-            if stat.S_ISLNK(mode):
+            if _is_zip_symlink(info):
                 _write_symlink(target, zf.read(info).decode("utf-8"))
                 continue
             with zf.open(info) as src, target.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
-            _apply_mode(target, mode)
+            if prog is not None:
+                prog.add(info.file_size)
+            _apply_mode(target, _zip_member_mode(info))
 
 
 def _mark_executables(dest_dir: Path) -> None:
@@ -325,12 +384,20 @@ def _mark_executables(dest_dir: Path) -> None:
             make_executable(path)
 
 
-def wipe_and_extract(archive_path: Path, dest_dir: Path) -> None:
+def wipe_and_extract(
+    archive_path: Path,
+    dest_dir: Path,
+    *,
+    component: str = "extract",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
     """Replace ``dest_dir`` with the contents of ``archive_path``.
 
     The directory is wiped first so stale DLLs/SOs from a previous release can
     never be picked up (invariant #4). A single wrapping top-level folder in
-    the archive is stripped; flat archives are extracted as-is.
+    the archive is stripped; flat archives are extracted as-is. Extraction
+    progress is reported byte-by-byte via ``component``/``overall_range`` so the
+    GUI bar advances through the extract phase instead of freezing on it.
     """
     if dest_dir.exists() or dest_dir.is_symlink():
         if dest_dir.is_symlink():
@@ -339,18 +406,32 @@ def wipe_and_extract(archive_path: Path, dest_dir: Path) -> None:
             shutil.rmtree(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    prog: _ExtractProgress | None = None
+    if _progress_callback is not None:
+        prog = _ExtractProgress(component, overall_range)
+
     if _is_tar_gz(archive_path):
-        _extract_tar(archive_path, dest_dir)
+        _extract_tar(archive_path, dest_dir, prog)
     elif archive_path.suffix.lower() == ".zip":
-        _extract_zip(archive_path, dest_dir)
+        _extract_zip(archive_path, dest_dir, prog)
     else:
         raise PrebuiltError(f"Unsupported archive format: {archive_path}")
+
+    if prog is not None:
+        prog.done = prog.total
+        emit_progress(component, prog.total, prog.total, "extract", overall_range[1])
 
     _mark_executables(dest_dir)
     clear_quarantine(dest_dir)
 
 
-def _extract_cudart(archive_path: Path, dest_dir: Path) -> None:
+def _extract_cudart(
+    archive_path: Path,
+    dest_dir: Path,
+    *,
+    component: str = "cudart",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
     """Drop the CUDA runtime shared libraries next to the backend binaries."""
     lib_suffixes = {".dll", ".so", ".dylib"}
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -359,28 +440,44 @@ def _extract_cudart(archive_path: Path, dest_dir: Path) -> None:
         member = _normalize(name)
         return bool(member.parts) and member.suffix.lower() in lib_suffixes
 
+    prog: _ExtractProgress | None = None
+    if _progress_callback is not None:
+        prog = _ExtractProgress(component, overall_range)
+
     if _is_tar_gz(archive_path):
         with tarfile.open(archive_path, "r:gz") as tf:
-            for member in tf.getmembers():
-                if not member.isfile() or not _wanted(member.name):
-                    continue
+            members = [m for m in tf.getmembers() if m.isfile() and _wanted(m.name)]
+            if prog is not None:
+                prog.set_total(sum(m.size for m in members))
+            for member in members:
                 target = _safe_target(dest_dir, Path(_normalize(member.name).name))
                 src = tf.extractfile(member)
                 if src is not None:
                     with src, target.open("wb") as dst:
                         shutil.copyfileobj(src, dst)
                     _apply_mode(target, member.mode)
+                    if prog is not None:
+                        prog.add(member.size)
     elif archive_path.suffix.lower() == ".zip":
         with zipfile.ZipFile(archive_path, "r") as zf:
-            for name in zf.namelist():
-                if not _wanted(name):
-                    continue
-                target = _safe_target(dest_dir, Path(_normalize(name).name))
-                with zf.open(name) as src, target.open("wb") as dst:
+            infos = [i for i in zf.infolist() if not i.is_dir() and _wanted(i.filename)]
+            if prog is not None:
+                prog.set_total(
+                    sum(i.file_size for i in infos if not _is_zip_symlink(i))
+                )
+            for info in infos:
+                target = _safe_target(dest_dir, Path(_normalize(info.filename).name))
+                with zf.open(info) as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
-                _apply_mode(target, _zip_member_mode(zf.getinfo(name)))
+                _apply_mode(target, _zip_member_mode(info))
+                if prog is not None:
+                    prog.add(info.file_size)
     else:
         raise PrebuiltError(f"Unsupported archive format for cudart: {archive_path}")
+
+    if prog is not None:
+        prog.done = prog.total
+        emit_progress(component, prog.total, prog.total, "extract", overall_range[1])
 
 
 def write_version_marker(
@@ -429,13 +526,39 @@ def install_backend(
     if not asset:
         raise PrebuiltError(f"No asset matching '{pattern}' in release {tag}")
 
-    cache_path = cached_download(
-        asset["url"], asset["size"], downloads_dir, token, component=backend
-    )
-    emit_progress(backend, asset["size"], asset["size"], "extract")
-    wipe_and_extract(cache_path, managed_root / backend)
-
+    # Decide the phase split up front so each stage maps to a known slice of the
+    # overall progress bar (download → extract → [cudart download → cudart
+    # extract]). Weights are heuristics tuned to typical asset sizes (~150 MB
+    # binary vs ~390 MB cudart pack).
     cudart = _cudart_pattern(entry, bundle_cuda_runtime)
+    if cudart:
+        ranges = {
+            "download": (0.0, 0.55),
+            "extract": (0.55, 0.75),
+            "cudart_download": (0.75, 0.95),
+            "cudart_extract": (0.95, 1.0),
+        }
+    else:
+        ranges = {
+            "download": (0.0, 0.7),
+            "extract": (0.7, 1.0),
+        }
+
+    cache_path = cached_download(
+        asset["url"],
+        asset["size"],
+        downloads_dir,
+        token,
+        component=backend,
+        overall_range=ranges["download"],
+    )
+    wipe_and_extract(
+        cache_path,
+        managed_root / backend,
+        component=backend,
+        overall_range=ranges["extract"],
+    )
+
     if cudart:
         cudart_asset = match_asset(assets, cudart)
         if cudart_asset:
@@ -446,11 +569,14 @@ def install_backend(
                 downloads_dir,
                 token,
                 component=component,
+                overall_range=ranges["cudart_download"],
             )
-            emit_progress(
-                component, cudart_asset["size"], cudart_asset["size"], "extract"
+            _extract_cudart(
+                cudart_cache,
+                managed_root / backend,
+                component=component,
+                overall_range=ranges["cudart_extract"],
             )
-            _extract_cudart(cudart_cache, managed_root / backend)
         elif entry.needs_cudart:
             raise PrebuiltError(
                 f"Release {tag} has no CUDA runtime pack matching '{cudart}'; "

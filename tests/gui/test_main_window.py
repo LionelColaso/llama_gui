@@ -7,6 +7,7 @@ from pytestqt.qtbot import QtBot
 from llamagui.gui.main_window import MainWindow
 from llamagui.gui.pages.backends import BackendsPage
 from llamagui.gui.pages.dashboard import DashboardHome
+from llamagui.gui.pages.downloads import DownloadsPage
 from llamagui.gui.pages.logs import LogsPage
 from llamagui.gui.pages.server_args import ServerArgsPage
 from llamagui.gui.pages.settings import SettingsPage
@@ -45,6 +46,10 @@ def test_navigation_switches_pages(qtbot: QtBot, fake_orch: MagicMock) -> None:
         w._nav.setCurrentRow(3)
         assert w._pages.currentIndex() == 3
         assert isinstance(w._pages.currentWidget(), SettingsPage)
+
+        w._nav.setCurrentRow(4)
+        assert w._pages.currentIndex() == 4
+        assert isinstance(w._pages.currentWidget(), DownloadsPage)
 
 
 def test_dashboard_has_backend_cards(qtbot: QtBot, fake_orch: MagicMock) -> None:

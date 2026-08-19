@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...download import DownloadControl
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.backend_card import BackendCard
@@ -220,12 +221,17 @@ class BackendsPage(QWidget):
         *,
         on_done: Any = None,
         progress_callback: Any = None,
+        control: Any = None,
         **kwargs: Any,
     ) -> None:
         self._set_actions_enabled(False)
-        self._progress.start_operation(label)
+        self._progress.start_operation(label, control=control)
         worker = EngineWorker(
-            self._orch, action, progress_callback=progress_callback, **kwargs
+            self._orch,
+            action,
+            progress_callback=progress_callback,
+            control=control,
+            **kwargs,
         )
         worker.signals.finished.connect(
             functools.partial(self._on_action_done, on_done=on_done)
@@ -242,6 +248,7 @@ class BackendsPage(QWidget):
     def _on_action_error(self, msg: str) -> None:
         self._set_actions_enabled(True)
         with suppress(RuntimeError):
+            self._progress.fail_operation(msg)
             self._status_label.setText(f"Error: {msg}")
 
     def _after_action(self) -> None:
@@ -253,36 +260,47 @@ class BackendsPage(QWidget):
     # ─── Actions ────────────────────────────────────────────────────────────
 
     def _do_install(self, name: str) -> None:
+        control = DownloadControl()
         self._start(
             "install",
             f"Installing {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
+            control=control,
             backends=[name],
         )
 
     def _do_update(self, name: str) -> None:
+        control = DownloadControl()
         self._start(
             "update",
             f"Updating {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
+            control=control,
             backends=[name],
         )
 
     def _do_use(self, name: str) -> None:
+        control = DownloadControl()
         self._start(
             "use",
             f"Switching to {name}…",
             on_done=self._after_action,
+            progress_callback=self._on_progress,
+            control=control,
             backend=name,
             auto_install=True,
         )
 
     def _do_download_all(self) -> None:
+        control = DownloadControl()
         self._start(
             "bootstrap",
             "Downloading what is missing…",
             on_done=self._after_action,
             progress_callback=self._on_progress,
+            control=control,
         )
 
     def _do_launch(self) -> None:
@@ -363,8 +381,10 @@ class BackendsPage(QWidget):
 
     # ─── Signals ───────────────────────────────────────────────────────────
 
-    def _on_progress(self, done: int, total: int, phase: str) -> None:
-        self._progress.update_progress(done, total, phase)
+    def _on_progress(
+        self, done: int, total: int, phase: str, overall: float | None = None
+    ) -> None:
+        self._progress.update_progress(done, total, phase, overall)
 
     def _on_status_error(self, msg: str) -> None:
         self._busy = False

@@ -144,6 +144,17 @@ def _build_parser() -> _Parser:
 
     add("list-assets", "List the assets of the latest release")
 
+    add(
+        "pending-downloads",
+        "List interrupted downloads (models + backend cache) that can be resumed",
+    )
+
+    discard_p = add(
+        "discard-download",
+        "Delete an interrupted download (.part + meta) by destination path",
+    )
+    discard_p.add_argument("dest", help="Destination path from pending-downloads")
+
     server_args_p = add(
         "server-args", "List every llama-server option with its current value"
     )
@@ -191,6 +202,10 @@ def _dispatch(orch: Orchestrator, args: argparse.Namespace) -> Any:
         return orch.stop()
     if action == "list-assets":
         return orch.list_assets()
+    if action == "pending-downloads":
+        return orch.pending_downloads()
+    if action == "discard-download":
+        return orch.discard_download(args.dest)
     if action == "server-args":
         return orch.describe_server_args(args.flag)
     if action == "set-arg":

@@ -87,6 +87,28 @@ class DownloadData(BaseModel):
     size_bytes: int = 0
 
 
+class PendingDownloadInfo(BaseModel):
+    """One interrupted download (``.part`` + meta) offered for resume."""
+
+    id: str = ""
+    kind: str = "model"  # "model" (.gguf) or "backend" (release archive)
+    name: str = ""
+    url: str = ""
+    dest: str = ""
+    part: str = ""
+    total: int = 0
+    done: int = 0
+    percent: float = 0.0
+
+
+class PendingDownloadsData(BaseModel):
+    """All interrupted downloads the app knows about, grouped by source dir."""
+
+    models_dir: str = ""
+    downloads_dir: str = ""
+    tasks: list[PendingDownloadInfo] = []
+
+
 class PlatformData(BaseModel):
     system: str = ""
     arch: str = ""

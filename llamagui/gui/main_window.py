@@ -21,6 +21,7 @@ from ..orchestrator import Orchestrator
 from ..schemas import InstallData
 from .dialogs.first_run import FirstRunDialog
 from .pages.dashboard import DashboardHome
+from .pages.downloads import DownloadsPage
 from .pages.logs import LogsPage
 from .pages.server_args import ServerArgsPage
 from .pages.settings import SettingsPage
@@ -42,7 +43,9 @@ class MainWindow(QWidget):
 
         self._nav = QListWidget()
         self._nav.setObjectName("Sidebar")
-        self._nav.addItems(["Dashboard", "Server options", "Logs", "Settings"])
+        self._nav.addItems(
+            ["Dashboard", "Server options", "Logs", "Settings", "Downloads"]
+        )
         self._nav.currentRowChanged.connect(self._switch_page)
 
         sidebar = QWidget()
@@ -73,12 +76,14 @@ class MainWindow(QWidget):
         self._logs = LogsPage(root_path / "state")
         self._server_args = ServerArgsPage(self._orch)
         self._settings = SettingsPage(self._orch)
+        self._downloads = DownloadsPage(self._orch)
 
         for page in (
             self._dashboard,
             self._server_args,
             self._logs,
             self._settings,
+            self._downloads,
         ):
             self._pages.addWidget(page)
 
