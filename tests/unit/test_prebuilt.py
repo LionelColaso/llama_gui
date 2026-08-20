@@ -446,6 +446,7 @@ def test_download_emits_progress_without_content_length(tmp_path: Path) -> None:
         captured.append(args)
 
     class _Resp:
+        status_code: ClassVar[int] = 200  # full (non-range) 200 response
         headers: ClassVar[dict[str, str]] = {}  # no content-length
 
         def raise_for_status(self) -> None:

@@ -18,9 +18,8 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-import httpx
-
 from .backends.prebuilt import emit_progress
+from .download import DownloadCancelled, DownloadError, stream_download
 from .schemas import DownloadData, ModelInfo
 
 #: Files that count as models. Lower-cased suffix match.
@@ -108,82 +107,17 @@ def download_model(url: str, models_dir: Path, timeout: float = 30.0) -> Downloa
     models_dir.mkdir(parents=True, exist_ok=True)
     name = model_name_from_url(url)
     final_path = models_dir / name
-    part_path = models_dir / f"{name}.part"
-
-    # Resume offset from a previous interrupted download.
-    offset = part_path.stat().st_size if part_path.exists() else 0
-    headers: dict[str, str] = {}
-    if offset:
-        headers["Range"] = f"bytes={offset}-"
-
-    mode = "ab" if offset else "wb"
     try:
-        done, size_total = _stream_download(
-            url, part_path, headers, offset, mode, timeout
+        stream_download(
+            url, final_path, component="model", timeout=timeout, emit=emit_progress
         )
-    except httpx.HTTPError as e:
-        raise ModelDownloadError(f"Download failed: {e}") from e
-
-    if size_total and done != size_total:
-        raise ModelDownloadError(
-            f"Download size mismatch for {name}: got {done} of {size_total} bytes"
-        )
-
-    part_path.replace(final_path)
-    return DownloadData(name=name, path=str(final_path), size_bytes=done)
-
-
-def _stream_download(
-    url: str,
-    part_path: Path,
-    headers: dict[str, str],
-    offset: int,
-    mode: str,
-    timeout: float,
-) -> tuple[int, int]:
-    """Stream the URL body into ``part_path``; returns ``(done, size_total)``.
-
-    Lets :func:`download_model` keep its httpx concerns in one place and map
-    every ``httpx.HTTPError`` (connect, read, status) to ``ModelDownloadError``.
-    """
-    with httpx.stream(
-        "GET", url, headers=headers, timeout=timeout, follow_redirects=True
-    ) as response:
-        if offset and response.status_code == 200:
-            # Server ignored the Range header: start from scratch.
-            offset = 0
-            mode = "wb"
-        response.raise_for_status()
-
-        size_total = offset
-        content_range = response.headers.get("Content-Range")
-        if content_range:
-            # "bytes 100-199/200" -> total is the last field.
-            with_last = content_range.rsplit("/", 1)[-1]
-            if with_last.isdigit():
-                size_total = int(with_last)
-        elif response.status_code == 200:
-            length = response.headers.get("Content-Length")
-            if length and length.isdigit():
-                size_total = int(length)
-        elif size_total == offset:
-            length = response.headers.get("Content-Length")
-            if length and length.isdigit():
-                size_total = offset + int(length)
-
-        def _overall(d: int) -> float | None:
-            return (d / size_total) if size_total else None
-
-        emit_progress("model", offset, size_total, "download", _overall(offset))
-        done = offset
-        with part_path.open(mode, buffering=1024 * 1024) as handle:
-            for chunk in response.iter_bytes(1024 * 1024):
-                if not chunk:
-                    continue
-                handle.write(chunk)
-                done += len(chunk)
-                emit_progress("model", done, size_total, "download", _overall(done))
-    return done, size_total
+    except DownloadCancelled as e:
+        raise ModelDownloadError(f"Download cancelled: {url}") from e
+    except DownloadError as e:
+        raise ModelDownloadError(str(e)) from e
+    return DownloadData(
+        name=name, path=str(final_path), size_bytes=final_path.stat().st_size
+    )
 
 
 def remove_model(models_dir: Path, name: str) -> None:

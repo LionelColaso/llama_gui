@@ -37,6 +37,7 @@ class EngineWorker(QRunnable):
         orch: Orchestrator,
         action: str,
         progress_callback: Any = None,
+        control: Any = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -44,6 +45,7 @@ class EngineWorker(QRunnable):
         self._action = action
         self._kwargs = kwargs
         self._progress_callback = progress_callback
+        self._control = control
         self.signals = WorkerSignals()
 
     def _execute_action(self) -> None:
@@ -79,6 +81,7 @@ class EngineWorker(QRunnable):
         # Wire the global progress callback *before* running the action so
         # that httpx-download / extract progress is forwarded to the GUI.
         from ..backends.prebuilt import set_progress_callback
+        from ..download import set_download_control
 
         if self._progress_callback is not None:
             # Signal connection (not a direct call): the emit happens on this
@@ -88,10 +91,12 @@ class EngineWorker(QRunnable):
         set_progress_callback(
             self._forward_progress if self._progress_callback is not None else None
         )
+        set_download_control(self._control)
         try:
             self._execute_action()
         finally:
             set_progress_callback(None)
+            set_download_control(None)
             if self._progress_callback is not None:
                 # The C++ signal object may already be destroyed when the app
                 # quits mid-download (same deleted-receiver race as _emit).

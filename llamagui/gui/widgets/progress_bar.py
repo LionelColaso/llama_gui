@@ -28,8 +28,15 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
+from ...download import DownloadControl
 from ..theme import COLORS
 
 # Inline override applied only while the bar is in the failure state. It restyles
@@ -101,17 +108,68 @@ class ProgressWidget(QWidget):
         self._bar.setValue(0)
         self._bar.hide()
         layout.addWidget(self._bar)
+
+        # Pause / Resume / Cancel controls, shown only while a download with a
+        # control handle is running (so static actions like Stop stay clean).
+        self._control: DownloadControl | None = None
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 4, 0, 0)
+        self._pause_btn = QPushButton("Pause")
+        self._resume_btn = QPushButton("Resume")
+        self._cancel_btn = QPushButton("Cancel")
+        self._pause_btn.setObjectName("GhostButton")
+        self._resume_btn.setObjectName("GhostButton")
+        self._cancel_btn.setObjectName("GhostButton")
+        self._pause_btn.clicked.connect(self._on_pause)
+        self._resume_btn.clicked.connect(self._on_resume)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+        for btn in (self._pause_btn, self._resume_btn, self._cancel_btn):
+            btn.hide()
+            controls.addWidget(btn)
+        controls.addStretch()
+        layout.addLayout(controls)
         self._reset_rate()
 
     # ─── Lifecycle ───────────────────────────────────────────────────────────
 
-    def start_operation(self, label: str = "") -> None:
-        """Show the bar in the indeterminate (busy) state for a new operation."""
+    def start_operation(
+        self, label: str = "", control: DownloadControl | None = None
+    ) -> None:
+        """Show the bar in the indeterminate (busy) state for a new operation.
+
+        Pass a :class:`~llamagui.download.DownloadControl` to expose Pause /
+        Resume / Cancel buttons that drive a resumable download.
+        """
         self._clear_error_style()
         self._reset_rate()
+        self._control = control
         self._bar.setRange(0, 0)
         self._bar.setFormat(label)
         self._bar.show()
+        self._update_control_buttons()
+
+    def _update_control_buttons(self) -> None:
+        has_control = self._control is not None
+        for btn in (self._pause_btn, self._resume_btn, self._cancel_btn):
+            btn.setVisible(has_control)
+        if self._control is not None:
+            self._pause_btn.setEnabled(not self._control.paused)
+            self._resume_btn.setEnabled(self._control.paused)
+
+    def _on_pause(self) -> None:
+        if self._control is not None:
+            self._control.pause()
+            self._update_control_buttons()
+
+    def _on_resume(self) -> None:
+        if self._control is not None:
+            self._control.resume()
+            self._update_control_buttons()
+
+    def _on_cancel(self) -> None:
+        if self._control is not None:
+            self._control.cancel()
+            self._update_control_buttons()
 
     def update_progress(
         self,
@@ -157,6 +215,8 @@ class ProgressWidget(QWidget):
         """Mark the operation complete and hide the bar again."""
         self._clear_error_style()
         self._reset_rate()
+        self._control = None
+        self._update_control_buttons()
         self._bar.setRange(0, 100)
         self._bar.setValue(100)
         self._bar.setFormat("done")
@@ -166,6 +226,8 @@ class ProgressWidget(QWidget):
         """Leave a full, danger-colored bar visible so the failure is obvious."""
         self._reset_rate()
         self._bar.setStyleSheet(_ERROR_CSS)
+        self._control = None
+        self._update_control_buttons()
         self._bar.setRange(0, 100)
         self._bar.setValue(100)
         self._bar.setFormat(f"failed: {message}")
@@ -175,6 +237,8 @@ class ProgressWidget(QWidget):
         """Hide the bar and drop any failure styling, back to the idle state."""
         self._clear_error_style()
         self._reset_rate()
+        self._control = None
+        self._update_control_buttons()
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
         self._bar.setFormat("")

@@ -17,6 +17,12 @@ from .backends.prebuilt import (
     list_assets,
 )
 from .config import AppConfig
+from .download import (
+    discard_pending as _discard_pending,
+)
+from .download import (
+    pending_downloads as _scan_pending_downloads,
+)
 from .lifecycle import (
     build_llama_server_args,
     check_port,
@@ -57,6 +63,8 @@ from .schemas import (
     InstallResultItem,
     ListAssetsData,
     ModelsData,
+    PendingDownloadInfo,
+    PendingDownloadsData,
     PlatformData,
     ResolveData,
     ResolvedBinaryData,
@@ -89,6 +97,8 @@ ACTIONS = (
     "launch",
     "restart",
     "list-assets",
+    "pending-downloads",
+    "discard-download",
     "config",
     "server-args",
     "set-arg",
@@ -360,6 +370,43 @@ class Orchestrator:
 
     def list_assets(self) -> ListAssetsData:
         return ListAssetsData(**list_assets(token=self._github_token()))
+
+    def pending_downloads(self) -> PendingDownloadsData:
+        """Every interrupted download (models + backend cache) offered for resume.
+
+        A single screen therefore covers both .gguf model downloads and
+        half-downloaded backend release archives across app restarts.
+        """
+        return PendingDownloadsData(
+            models_dir=str(self._models_dir()),
+            downloads_dir=str(self.cfg.downloads_dir),
+            tasks=[
+                PendingDownloadInfo(**task)
+                for task in _scan_pending_downloads(
+                    [
+                        ("model", self._models_dir()),
+                        ("backend", self.cfg.downloads_dir),
+                    ]
+                )
+            ],
+        )
+
+    def discard_download(self, dest: str) -> PendingDownloadsData:
+        """Delete an interrupted download's ``.part`` and meta, then re-list.
+
+        ``dest`` must resolve inside the models dir or the downloads dir —
+        anything outside the app's write surface is rejected (invariant #0).
+        """
+        with mutation_lock(self.root):
+            target = Path(dest).resolve()
+            roots = (self._models_dir().resolve(), self.cfg.downloads_dir.resolve())
+            if not any(_is_within(target, base) for base in roots):
+                raise EngineError(
+                    ExitCode.BAD_ARGUMENT,
+                    f"Refusing to discard outside managed dirs: {dest}",
+                )
+            _discard_pending(target)
+            return self.pending_downloads()
 
     # ─── Models ──────────────────────────────────────────────────────────
 
@@ -640,6 +687,11 @@ class Orchestrator:
 
 
 # ─── Module helpers ───────────────────────────────────────────────────────
+
+
+def _is_within(child: Path, base: Path) -> bool:
+    """True when ``child`` is ``base`` itself or a directory below it."""
+    return child == base or base in child.parents
 
 
 def _platform_data() -> PlatformData:

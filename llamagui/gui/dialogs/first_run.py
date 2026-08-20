@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...download import DownloadControl
 from ..payload import as_payload
 from ..widgets.progress_bar import ProgressWidget
 from ..worker_pool import EngineWorker, WorkerPool
@@ -67,9 +68,13 @@ class FirstRunDialog(QDialog):
 
     def _download(self) -> None:
         self._download_btn.setEnabled(False)
-        self._progress.start_operation("Downloading…")
+        control = DownloadControl()
+        self._progress.start_operation("Downloading…", control=control)
         worker = EngineWorker(
-            self._orch, "bootstrap", progress_callback=self._on_progress
+            self._orch,
+            "bootstrap",
+            progress_callback=self._on_progress,
+            control=control,
         )
         worker.signals.finished.connect(self._on_finished)
         worker.signals.error.connect(self._on_error)

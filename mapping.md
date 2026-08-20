@@ -29,6 +29,7 @@ llama_gui/
 │   │   │   ├── __init__.py
 │   │   │   ├── backends.py
 │   │   │   ├── dashboard.py
+│   │   │   ├── downloads.py
 │   │   │   ├── logs.py
 │   │   │   ├── models.py
 │   │   │   ├── server_args.py
@@ -36,6 +37,7 @@ llama_gui/
 │   │   ├── widgets/
 │   │   │   ├── __init__.py
 │   │   │   ├── backend_card.py
+│   │   │   ├── download_runner.py
 │   │   │   ├── log_view.py
 │   │   │   ├── model_table.py
 │   │   │   ├── path_picker.py
@@ -53,6 +55,7 @@ llama_gui/
 │   ├── applog.py
 │   ├── cli.py
 │   ├── config.py
+│   ├── download.py
 │   ├── lifecycle.py
 │   ├── locking.py
 │   ├── model_store.py
@@ -73,6 +76,7 @@ llama_gui/
 │   │   ├── __init__.py
 │   │   ├── conftest.py
 │   │   ├── test_dashboard.py
+│   │   ├── test_downloads_page.py
 │   │   ├── test_main_window.py
 │   │   ├── test_phase7.py
 │   │   ├── test_progress_widget.py
@@ -86,8 +90,10 @@ llama_gui/
 │   │   ├── test_cli.py
 │   │   ├── test_config_durable.py
 │   │   ├── test_contract.py
+│   │   ├── test_download.py
 │   │   ├── test_lifecycle.py
 │   │   ├── test_lifecycle_posix.py
+│   │   ├── test_locking.py
 │   │   ├── test_models_catalogue.py
 │   │   ├── test_orchestrator.py
 │   │   ├── test_paths.py

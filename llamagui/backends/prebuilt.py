@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from ..download import DownloadCancelled, DownloadError, stream_download
 from ..models import Backend, backend_availability, get_backend
 from ..paths import (
     clear_quarantine,
@@ -125,8 +126,7 @@ class _ExtractProgress:
         )
         emit_progress(self.component, self.done, self.total, "extract", overall)
 
-
-# ─── GitHub API ───────────────────────────────────────────────────────────
+    # ─── GitHub API x ──────────────────────────────────────────────────────────
 
 
 @functools.lru_cache(maxsize=32)
@@ -170,31 +170,20 @@ def download_file(
     *,
     component: str = "download",
     overall_range: tuple[float, float] = (0.0, 1.0),
-) -> None:
-    headers: dict[str, str] = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    lo, hi = overall_range
+) -> Path:
     try:
-        with httpx.stream(
-            "GET", url, headers=headers, timeout=120.0, follow_redirects=True
-        ) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", "0") or 0)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            done = 0
-            with dest.open("wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-                    done += len(chunk)
-                    # Always emit so the GUI shows movement; when the server
-                    # omits Content-Length (total == 0) no overall fraction is
-                    # known and the bar renders indeterminate rather than frozen.
-                    frac = done / total if total else None
-                    overall = lo + frac * (hi - lo) if frac is not None else None
-                    emit_progress(component, done, total, "download", overall)
-    except httpx.HTTPError as e:
-        raise PrebuiltError(f"Download failed: {e}") from e
+        return stream_download(
+            url,
+            dest,
+            auth_token=token,
+            component=component,
+            overall_range=overall_range,
+            emit=emit_progress,
+        )
+    except DownloadCancelled as e:
+        raise PrebuiltError(f"Download cancelled: {url}") from e
+    except DownloadError as e:
+        raise PrebuiltError(str(e)) from e
 
 
 def cached_download(
