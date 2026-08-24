@@ -15,7 +15,7 @@ dev = [
   "pytest>=8",
   "pytest-qt>=4",
   "pytest-mock>=3",
-  "ruff>=0.6",
+  "ruff>=0.16.4",
   "mypy>=1.11",
   "pyright>=1.1",
   "ordered-set",
