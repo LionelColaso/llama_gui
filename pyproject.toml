@@ -25,7 +25,7 @@ dev = [
 # Build-time only: keeps the Nuitka standalone bundle lean by excluding test
 # and type-checker deps (mypy/pyright/pytest) from the frozen binary.
 build = [
-  "nuitka>=2.0",
+  "nuitka>=4.2",
 ]
 
 [project.scripts]
