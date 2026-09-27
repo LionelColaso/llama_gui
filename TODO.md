@@ -45,12 +45,13 @@ reproduction — confirm before acting.
       Added `get_progress_callback()` and fixed the two extraction sites that
       still read the old global. 4 new tests cover isolation and non-leakage
       across threads.
-- [ ] **`--json` is read from `sys.argv`, not the parsed argv, on argparse
-      errors** — `llamagui/cli.py` `_Parser.error` uses
-      `"--json" in sys.argv` while `main()` uses its `argv` argument. Invoking
-      `main(["bogus", "--json"])` programmatically (tests, embedding) exits 5 but
-      prints the *human* error instead of the documented JSON envelope. Pass
-      `argv` (or a resolved `use_json` flag) into the parser.
+- [x] ~~**`--json` is read from `sys.argv`, not the parsed argv, on argparse
+      errors**~~ — **done** (`llamagui/cli.py`): `_Parser` now takes a `use_json`
+      flag that `main()` passes in from its real `argv`, so an argument error
+      emits the documented JSON envelope for programmatic callers (tests,
+      embedding) as well as the process CLI. The two CLI tests were strengthened
+      to assert the actual output (envelope fields / stderr text), not just the
+      exit code — the exit code alone hid this bug entirely.
 - [ ] **`clear_quarantine` spawns one `xattr` process per file** —
       `llamagui/paths.py`. The llama.cpp release tree holds thousands of files,
       so a macOS install spawns thousands of subprocesses (minutes of wall clock,

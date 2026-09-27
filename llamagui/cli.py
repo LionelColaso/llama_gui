@@ -78,19 +78,36 @@ def emit(env: Envelope, use_json: bool) -> int:
 
 
 class _Parser(argparse.ArgumentParser):
+    """Argument parser that honours the ``--json`` flag even on a usage error.
+
+    The envelope is part of the machine contract (§11): a script that passes
+    ``--json`` must receive JSON on stdout and exit 5 even when the action name
+    is wrong. Deciding that from ``sys.argv`` broke it for every caller that
+    does not go through the process command line — the tests, and anything
+    embedding the engine — so the decision is passed in from :func:`main`,
+    which owns the real ``argv``.
+    """
+
+    def __init__(self, *args: Any, use_json: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._use_json = use_json
+
     def error(self, message: str) -> NoReturn:
         logger.error("cli argument error: {}", message)
-        use_json = "--json" in sys.argv
         env = build_env("", False, ExitCode.BAD_ARGUMENT, error=message)
-        if use_json:
+        if self._use_json:
             sys.stdout.write(env.model_dump_json(indent=2) + "\n")
         else:
             sys.stderr.write(f"error: {message}\n")
         sys.exit(ExitCode.BAD_ARGUMENT)
 
 
-def _build_parser() -> _Parser:
-    parser = _Parser(prog="llamagui", description="llama-gui engine CLI")
+def _build_parser(use_json: bool = False) -> _Parser:
+    parser = _Parser(
+        prog="llamagui",
+        description="llama-gui engine CLI",
+        use_json=use_json,
+    )
     parser.add_argument("--root", help="Override the managed root directory")
     parser.add_argument("--json", action="store_true", help="Emit one JSON envelope")
     sub = parser.add_subparsers(dest="action", required=True)
@@ -234,7 +251,9 @@ def main(argv: list[str] | None = None) -> int:
 
     _force_utf8_stdio()
     use_json = "--json" in argv
-    args = _build_parser().parse_args(argv)
+    # The parser needs the same decision, so an argument error still emits the
+    # documented JSON envelope rather than a human message.
+    args = _build_parser(use_json=use_json).parse_args(argv)
 
     if args.action == "gui":
         from .gui.app import run as run_gui
