@@ -170,6 +170,22 @@ def is_executable(path: Path) -> bool:
     return os.access(path, os.X_OK)
 
 
+def _xattr(*args: str) -> bool:
+    """Run ``xattr`` and report success; False when the tool is unusable."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["xattr", *args],
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def clear_quarantine(target: Path) -> None:
     """Strip the macOS ``com.apple.quarantine`` xattr from a downloaded tree.
 
@@ -177,25 +193,26 @@ def clear_quarantine(target: Path) -> None:
     quarantine attribute. This is a best-effort call: failures are ignored
     because the user can also approve the binary manually.
 
-    Walks the entire tree and clears the attribute on every file, because
-    ``xattr -dr`` on the root alone does not always remove the attribute
-    from nested files and symlinks.
+    ``xattr -dr <attr> <target>`` is tried first, which clears the attribute
+    over the whole tree in a single process. The per-file loop is only a
+    fallback: the original version ran ``xattr -d`` once per file, and a
+    llama.cpp release holds thousands, so a macOS install spawned thousands of
+    subprocesses — minutes of wall clock, and trivially interruptible halfway
+    (leaving the tree half-quarantined).
     """
     if not is_macos() or not target.exists():
         return
-    import subprocess
 
+    if _xattr("-dr", "com.apple.quarantine", str(target)):
+        return
+
+    # Fallback for the cases the recursive form misses (notably symlinks, and
+    # filesystems where ``-r`` does not descend).
     try:
         for path in target.rglob("*"):
-            if not path.is_file():
-                continue
-            subprocess.run(
-                ["xattr", "-d", "com.apple.quarantine", str(path)],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-    except (OSError, subprocess.SubprocessError):
+            if path.is_file() or path.is_symlink():
+                _xattr("-d", "com.apple.quarantine", str(path))
+    except OSError:
         pass
 
 

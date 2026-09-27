@@ -104,3 +104,87 @@ def test_is_executable_rejects_directories(tmp_path: Path) -> None:
 
 def test_clear_quarantine_is_safe_on_missing_path(tmp_path: Path) -> None:
     paths.clear_quarantine(tmp_path / "does-not-exist")
+
+
+# ─── clear_quarantine uses one recursive xattr call ────────────────────────
+
+
+def _macos_tree(tmp_path: Path, files: int) -> Path:
+    """A release-like tree: nested dirs and many files."""
+    root = tmp_path / "backend"
+    for d in range(3):
+        sub = root / "build0" / f"bin{d}"
+        sub.mkdir(parents=True, exist_ok=True)
+        for i in range(files):
+            (sub / f"file{i}.dylib").write_bytes(b"x" * 8)
+    return root
+
+
+class _XattrResult:
+    def __init__(self, code: int) -> None:
+        self.returncode = code
+
+
+def _record_xattr(
+    monkeypatch: pytest.MonkeyPatch, *, recursive_fails: bool = False
+) -> list[list[str]]:
+    """Patch subprocess.run, recording every xattr invocation.
+
+    ``recursive_fails`` makes the ``-dr`` form report failure so the per-file
+    fallback can be exercised.
+    """
+    calls: list[list[str]] = []
+
+    def _run(cmd: list[str], **kwargs: object) -> _XattrResult:
+        calls.append(cmd)
+        code = 1 if (recursive_fails and "-dr" in cmd) else 0
+        return _XattrResult(code)
+
+    monkeypatch.setattr("subprocess.run", _run)
+    return calls
+
+
+def test_clear_quarantine_uses_a_single_recursive_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: it spawned one xattr per file, so a real release (thousands
+    of files) took minutes and could be interrupted half-quarantined."""
+    monkeypatch.setattr(paths, "is_macos", lambda: True)
+    calls = _record_xattr(monkeypatch)
+    root = _macos_tree(tmp_path, files=50)
+
+    paths.clear_quarantine(root)
+
+    assert len(calls) == 1, f"expected one recursive xattr call, got {len(calls)}"
+    assert calls[0][:2] == ["xattr", "-dr"]
+    assert calls[0][-1] == str(root)
+
+
+def test_clear_quarantine_falls_back_per_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the recursive form fails, still try per file rather than giving up."""
+    monkeypatch.setattr(paths, "is_macos", lambda: True)
+    calls = _record_xattr(monkeypatch, recursive_fails=True)
+    root = _macos_tree(tmp_path, files=2)
+
+    paths.clear_quarantine(root)
+
+    assert calls[0][:2] == ["xattr", "-dr"]
+    assert any(c[:2] == ["xattr", "-d"] for c in calls[1:])
+
+
+def test_clear_quarantine_is_a_noop_off_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(paths, "is_macos", lambda: False)
+    calls: list[str] = []
+
+    def _spy(*args: str) -> bool:
+        calls.extend(args)
+        return True
+
+    monkeypatch.setattr(paths, "_xattr", _spy)
+
+    paths.clear_quarantine(tmp_path)
+    assert calls == []

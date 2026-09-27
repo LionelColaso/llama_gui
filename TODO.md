@@ -52,12 +52,13 @@ reproduction — confirm before acting.
       embedding) as well as the process CLI. The two CLI tests were strengthened
       to assert the actual output (envelope fields / stderr text), not just the
       exit code — the exit code alone hid this bug entirely.
-- [ ] **`clear_quarantine` spawns one `xattr` process per file** —
-      `llamagui/paths.py`. The llama.cpp release tree holds thousands of files,
-      so a macOS install spawns thousands of subprocesses (minutes of wall clock,
-      and easy to interrupt halfway). Use one
-      `xattr -dr com.apple.quarantine <target>` and only fall back to the
-      per-file loop for entries the recursive call misses.
+- [x] ~~**`clear_quarantine` spawns one `xattr` process per file**~~ — **done**
+      (`llamagui/paths.py`): now tries a single recursive
+      `xattr -dr com.apple.quarantine <target>` first (one process for the whole
+      tree), falling back to the per-file loop only if that fails. The old
+      per-file `xattr -d` is kept as a fallback for symlinks and filesystems
+      where `-r` does not descend. 3 new tests assert a single recursive call,
+      the fallback, and that it stays a no-op off macOS.
 - [ ] **Unit tests touch the real user config and root** —
       `tests/unit/test_cli.py::test_describe_json` / `test_status_json` /
       `test_resolve_json` call `main([...])` with no `--root` and no
