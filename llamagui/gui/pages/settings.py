@@ -238,7 +238,11 @@ class SettingsPage(QWidget):
 
 def _format_resolution(label: str, info: dict[str, Any]) -> str:
     if not info.get("path"):
-        return f"{label}: not found"
+        # A resolver can fail with an error and no path (e.g. a binary that was
+        # found but could not be validated). Reporting only "not found" would
+        # hide the actual reason, so show it when there is one.
+        detail = info.get("error")
+        return f"{label}: {detail}" if detail else f"{label}: not found"
     state = "OK" if info.get("valid") else f"INVALID ({info.get('error') or '?'})"
     version = info.get("version") or "unknown version"
     return f"{label}: {info['path']} [{info.get('source')}] {version} — {state}"

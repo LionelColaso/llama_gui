@@ -180,9 +180,19 @@ reproduction — confirm before acting.
       the `is_relative_to` guard holds and that nothing outside the models dir is
       ever deleted.
 
-- [ ] **No tests for the keyring token path** — `llamagui/gui/token.py`
-      (get / set / delete) and `SettingsPage._clear_token` / `_validate` are
-      untested. Add a test with a monkeypatched `keyring`.
+- [x] ~~**No tests for the keyring token path**~~ — **done**: new
+      `tests/gui/test_token.py` (15 tests) using an in-memory fake keyring — never
+      the developer's real credential store. Covers set/get round-trip, unset and
+      empty values, delete (including of a missing entry), and all three
+      operations against a *broken* keyring backend. On the Settings page: a
+      stored token is masked, saving routes it to the keyring, the save payload
+      provably contains no token, re-saving under the mask does not clobber the
+      real value, clear-token works, and validate reports both success and
+      failure. Writing the failure case **found a real bug**:
+      `_format_resolution` reported a bare "not found" whenever there was no
+      `path`, silently dropping the resolver's `error` — so a binary that was
+      found but could not be validated was reported as missing.
+
 - [ ] **No test for `main_window._maybe_first_run`** — the ready/skip decision
       and `first_run_complete` persistence are untested. Add a test that the
       dialog is skipped when `ready` and shown when it is not.
