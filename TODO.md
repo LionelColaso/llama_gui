@@ -213,11 +213,14 @@ reproduction — confirm before acting.
       hardcoded extras) and `clean.py` (`--dry-run` deletes nothing, a real run
       removes caches and coverage files).
 
-- [ ] **`tests/gui/test_phase7.py` is a stale grab-bag** — the name no longer
-      describes its contents (model table, size formatting, models page,
-      settings page) and it keeps a class name (`TestConfigYaml`) left over from
-      a deleted module. Split it into `test_model_table.py`,
-      `test_models_page.py` and `test_settings_page.py`.
+- [x] ~~**`tests/gui/test_phase7.py` is a stale grab-bag**~~ — **done**: split
+      into `test_model_table.py` (ModelTable + size formatting),
+      `test_models_page.py` (ModelsPage + the deferred resume prompt) and
+      `test_settings_page.py` (SettingsPage + ServerArgsPage), each with only the
+      imports it uses. The stale `TestConfigYaml` class name (left over from the
+      deleted `config_yaml` module) is gone. Test count is unchanged at 389, so
+      nothing was dropped in the move.
+
 
 ## P3 — Docs, CI, ergonomics
 
