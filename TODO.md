@@ -224,10 +224,15 @@ reproduction — confirm before acting.
 
 ## P3 — Docs, CI, ergonomics
 
-- [ ] **`just check` and `scripts/check.py` have drifted** — the justfile runs
-      `actionlint` and `pytest -m "not integration" -v`; `scripts/check.py` runs
-      neither. Both files claim to mirror each other exactly. Re-sync them, or
-      have one delegate to the other.
+- [x] ~~**`just check` and `scripts/check.py` have drifted**~~ — **done**:
+      `check.py` now runs the same seven steps in the same order as the justfile
+      (`ruff format`, `ruff check`, `mypy`, `pyright`, `jscpd`, **`actionlint`**,
+      `pytest -m "not integration"`), driven by a single `_STEPS` table instead of
+      seven scattered constants. `jscpd`/`actionlint` are marked optional so a
+      missing tool skips rather than fails. New `tests/unit/test_check_script.py`
+      pins the parity: adding a step to one and not the other now fails the
+      suite. The script loader moved to a shared `tests/unit/script_loader.py`.
+
 - [ ] **Overlapping GitHub workflows** — `.github/workflows/` has `lint.yml`,
       `pyright.yml`, `pytest.yml`, `ci.yml`, `build.yml`, `auto_build.yml` and
       `release.yml`, several of which appear to re-run the same static-analysis

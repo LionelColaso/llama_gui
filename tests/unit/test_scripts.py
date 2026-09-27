@@ -8,33 +8,20 @@ the tests work regardless of whether ``scripts/`` is a package.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "scripts"
-
-
-def _load(name: str) -> ModuleType:
-    path = SCRIPTS / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"_script_{name}", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
+from .script_loader import ROOT, load_script
 
 # ─── stats.py ─────────────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
 def stats() -> ModuleType:
-    return _load("stats")
+    return load_script("stats")
 
 
 def test_stats_counts_the_projects_own_sources(stats: ModuleType) -> None:
@@ -87,7 +74,7 @@ def test_stats_main_runs_and_prints(
 
 @pytest.fixture(scope="module")
 def mapping() -> ModuleType:
-    return _load("mapping")
+    return load_script("mapping")
 
 
 def test_mapping_generates_a_tree(mapping: ModuleType) -> None:
@@ -115,7 +102,7 @@ def test_mapping_excludes_ignored_paths(mapping: ModuleType) -> None:
 
 def test_mapping_respects_gitignore_entries() -> None:
     """The parser must read patterns rather than hardcoding them."""
-    mapping = _load("mapping")
+    mapping = load_script("mapping")
     patterns = mapping.parse_gitignore(ROOT)
     assert patterns, "expected patterns from .gitignore"
     names = {p for p, _, _ in patterns}
@@ -127,7 +114,7 @@ def test_mapping_respects_gitignore_entries() -> None:
 
 @pytest.fixture(scope="module")
 def clean() -> ModuleType:
-    return _load("clean")
+    return load_script("clean")
 
 
 def test_clean_lists_what_it_would_remove(
