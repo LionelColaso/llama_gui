@@ -128,8 +128,8 @@ class AppConfig:
             cfg = cls(load_warnings=warnings)
             return cfg
 
-        cfg = cls.from_dict(raw)
-        cfg.load_warnings = warnings
+        # from_dict appends any clamping corrections to this same list.
+        cfg = cls.from_dict(raw, warnings)
         if source != target:
             # Persist the migrated copy at the new location, keeping the old
             # file in place as a backup.
@@ -138,8 +138,15 @@ class AppConfig:
         return cfg
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> AppConfig:
-        """Build a config from a settings dict, coercing invalid values."""
+    def from_dict(
+        cls, data: dict[str, Any], warnings: list[str] | None = None
+    ) -> AppConfig:
+        """Build a config from a settings dict, coercing and clamping values.
+
+        Out-of-range numbers are clamped and reported through ``warnings`` (or
+        the caller's ``load_warnings``) rather than being passed through to the
+        port probe or to ``llama-server`` verbatim.
+        """
         known = {
             "root",
             "host",
@@ -170,22 +177,49 @@ class AppConfig:
         return cls(
             root=_clean_str(data.get("root")) or str(default_root()),
             host=_clean_str(data.get("host")) or DEFAULT_HOST,
-            port=_coerce_int(data.get("port"), DEFAULT_PORT),
+            port=_coerce_int_clamped(
+                data.get("port"),
+                DEFAULT_PORT,
+                key="port",
+                low=1,
+                high=65535,
+                warnings=warnings,
+            ),
             default_backend=_clean_str(data.get("default_backend"))
             or default_backend(),
             use_os_llama_server=bool(data.get("use_os_llama_server", False)),
             models_dir=_clean_str(data.get("models_dir")) or "",
             active_model=_clean_str(data.get("active_model")) or "",
-            ctx_size=_coerce_int(data.get("ctx_size"), DEFAULT_CTX_SIZE),
-            n_gpu_layers=_coerce_int(data.get("n_gpu_layers"), DEFAULT_N_GPU_LAYERS),
+            ctx_size=_coerce_int_clamped(
+                data.get("ctx_size"),
+                DEFAULT_CTX_SIZE,
+                key="ctx_size",
+                low=0,  # 0 / negative means "auto": omit -c entirely
+                high=1 << 22,
+                warnings=warnings,
+            ),
+            n_gpu_layers=_coerce_int_clamped(
+                data.get("n_gpu_layers"),
+                DEFAULT_N_GPU_LAYERS,
+                key="n_gpu_layers",
+                low=-1,  # -1 is llama.cpp's "auto"
+                high=1 << 16,
+                warnings=warnings,
+            ),
             extra_server_args=_clean_str(data.get("extra_server_args")) or "",
             server_options=_clean_server_options(data.get("server_options")),
             bundle_cuda_runtime=_coerce_choice(
                 data.get("bundle_cuda_runtime"), CUDA_RUNTIME_MODES, "auto"
             ),
             auto_update=bool(data.get("auto_update", False)),
-            auto_update_interval_hours=_coerce_int(
-                data.get("auto_update_interval_hours"), 24
+            auto_update_interval_hours=_coerce_int_clamped(
+                data.get("auto_update_interval_hours"),
+                24,
+                key="auto_update_interval_hours",
+                # 0 or negative would make the QTimer fire continuously.
+                low=1,
+                high=24 * 365,
+                warnings=warnings,
             ),
             launch_on_start=bool(data.get("launch_on_start", False)),
             start_minimized=bool(data.get("start_minimized", False)),
@@ -193,6 +227,7 @@ class AppConfig:
             theme=_clean_str(data.get("theme")) or "system",
             token="",
             extra={k: v for k, v in data.items() if k not in known},
+            load_warnings=list(warnings) if warnings is not None else [],
         )
 
     # ─── Save ────────────────────────────────────────────────────────────
@@ -278,6 +313,33 @@ def _coerce_int(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _coerce_int_clamped(
+    value: Any,
+    fallback: int,
+    *,
+    key: str,
+    low: int,
+    high: int,
+    warnings: list[str] | None = None,
+) -> int:
+    """Read an int and clamp it into ``[low, high]``, reporting a correction.
+
+    A hand-edited or corrupted settings file must never be able to put the
+    engine into a state it cannot recover from -- ``port: 0`` would make the
+    port probe meaningless, and an out-of-range context or layer count would be
+    handed straight to ``llama-server`` as a command-line argument.
+    """
+    raw = _coerce_int(value, fallback)
+    if low <= raw <= high:
+        return raw
+    clamped = min(max(raw, low), high)
+    if warnings is not None:
+        warnings.append(
+            f"{key}: {raw} is outside {low}-{high}; using {clamped} instead"
+        )
+    return clamped
 
 
 def _coerce_choice(value: Any, allowed: tuple[str, ...], fallback: str) -> str:

@@ -77,12 +77,13 @@ reproduction — confirm before acting.
 
 ## P1 — Correctness & robustness
 
-- [ ] **Clamp numeric settings on load** — `llamagui/config.py` `_coerce_int`
-      accepts anything. A hand-edited `port: 0` / `port: 99999` or a negative
-      `ctx_size` is persisted verbatim and reaches `check_port` /
-      `build_llama_server_args`. Clamp `port` to 1–65535, clamp
-      `ctx_size` / `n_gpu_layers` to a sane range (or `auto`), and add a
-      `load_warnings` entry so the GUI can show it.
+- [x] ~~**Clamp numeric settings on load**~~ — **done** (`llamagui/config.py`):
+      `port` (1–65535), `ctx_size` (0 = auto … 4 Mi), `n_gpu_layers` (-1 = auto …
+      65536) and `auto_update_interval_hours` (1 … 1 year) are now clamped on
+      load, and each correction is appended to `load_warnings` so the GUI/CLI can
+      show it. 14 new tests cover the ranges, the warnings, and that in-range
+      values (including `ctx_size: 0`) stay untouched.
+
 - [ ] **"Ready" only means "a file exists"** — `llamagui/orchestrator.py`
       `status()` sets `ready=bool(server.path)`. `MainWindow._maybe_first_run`
       keys off `ready`, so a present-but-broken binary (wrong arch, missing CUDA

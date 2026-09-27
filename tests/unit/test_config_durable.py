@@ -115,6 +115,78 @@ def test_saving_the_default_config_writes_into_tmp_path(tmp_path: Path) -> None:
 def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     loaded = AppConfig.load(tmp_path / "absent" / "config.json")
     assert loaded.port == 8080
+
+
+# ─── numeric clamping on load ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "key", "expected"),
+    [
+        (0, "port", 1),
+        (-1, "port", 1),
+        (99999, "port", 65535),
+        (70000, "port", 65535),
+        (-5000, "ctx_size", 0),
+        (-7, "n_gpu_layers", -1),
+        (0, "auto_update_interval_hours", 1),
+        (-3, "auto_update_interval_hours", 1),
+    ],
+)
+def test_out_of_range_numbers_are_clamped(
+    tmp_path: Path, raw: int, key: str, expected: int
+) -> None:
+    """A hand-edited or corrupt file must not reach the port probe or the
+    llama-server command line with an impossible value."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({key: raw}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert getattr(loaded, key) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "raw"),
+    [
+        ("port", 999_999),
+        ("ctx_size", 999_999_999),
+        ("n_gpu_layers", 999_999),
+        ("auto_update_interval_hours", 999_999),
+    ],
+)
+def test_clamping_is_reported_as_a_load_warning(
+    tmp_path: Path, key: str, raw: int
+) -> None:
+    """Each key has its own range, so the value is chosen per key to exceed it."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({key: raw}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert any(key in w for w in loaded.load_warnings), (
+        f"clamping {key} should be surfaced, got {loaded.load_warnings}"
+    )
+
+
+def test_valid_values_produce_no_clamp_warning(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps({"port": 8080, "ctx_size": 4096, "n_gpu_layers": 999}),
+        encoding="utf-8",
+    )
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.load_warnings == []
+
+
+def test_ctx_size_zero_still_means_auto(tmp_path: Path) -> None:
+    """0 is a legitimate value (llama.cpp default context), not out of range."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"ctx_size": 0}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.ctx_size == 0
+    assert loaded.load_warnings == []
+
     assert loaded.root
 
 
