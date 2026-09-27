@@ -169,10 +169,17 @@ reproduction — confirm before acting.
       escape from `validate_value`, so bad input surfaced as exit 1
       (`UNEXPECTED_ERROR`) instead of 5 (`BAD_ARGUMENT`).
 
-- [ ] **No tests for `llamagui/model_store.py`** — `list_models` (recursive scan,
-      hidden-dir skip, sorting), `model_name_from_url` (query strings, HF
-      `resolve/main/...`, no-asset fallback) and `remove_model` path-traversal
-      rejection are all untested at the unit level.
+- [x] ~~**No tests for `llamagui/model_store.py`**~~ — **done**: extended
+      `tests/unit/test_model_store.py` with 21 tests for `list_models` (missing
+      dir, top-level, nested dirs with `/`-separated names, non-`.gguf` and
+      `.part` ignored, hidden-dir skip, case-insensitive sort, size/mtime),
+      `model_name_from_url` (HF `resolve/main`, query/fragment stripping, dotted
+      asset names, hex-digest fallback that is stable and cannot contain `/` or
+      `..`) and `remove_model` (delete, nested name, missing file, `../`
+      traversal, absolute path outside, non-`.gguf`). The traversal tests confirm
+      the `is_relative_to` guard holds and that nothing outside the models dir is
+      ever deleted.
+
 - [ ] **No tests for the keyring token path** — `llamagui/gui/token.py`
       (get / set / delete) and `SettingsPage._clear_token` / `_validate` are
       untested. Add a test with a monkeypatched `keyring`.
