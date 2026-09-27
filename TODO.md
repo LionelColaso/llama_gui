@@ -13,12 +13,12 @@ reproduction — confirm before acting.
 
 ## P0 — Bugs
 
-- [ ] **`pids.json` parsing assumes a JSON object** — `llamagui/lifecycle.py`
-      `_read_pids` catches only `JSONDecodeError` / `OSError` and then returns
-      `data` untyped. A hand-edited or truncated `state/pids.json` containing a
-      list or string makes `pids.get(...)` raise `AttributeError`, which escapes
-      through `status` / `stop` as `UNEXPECTED_ERROR`. Validate
-      `isinstance(data, dict)` and fall back to the empty structure.
+- [x] ~~**`pids.json` parsing assumes a JSON object**~~ — **done**
+      (`llamagui/lifecycle.py` `_read_pids`): the payload is now typed `object`
+      and rejected unless it is a dict, and `servers` is normalised to a dict so
+      the later `.values()` cannot fail either. A malformed file now degrades to
+      "no pids" instead of raising `AttributeError` out of `status` / `stop`.
+      Covered by 8 regression tests in `tests/unit/test_lifecycle.py`.
 - [ ] **`launch` / `restart` do not take the mutation lock** —
       `llamagui/orchestrator.py`. Every other mutation (`install`, `update`,
       `use`, `stop`, `download_model`, `remove_model`, `discard_download`) wraps

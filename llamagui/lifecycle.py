@@ -54,15 +54,33 @@ class LifecycleError(EngineError):
 # ─── pid bookkeeping ──────────────────────────────────────────────────────
 
 
+#: The pid file shape the engine reads. Anything else is treated as absent.
+_EMPTY_PIDS: dict[str, Any] = {"llama_server": None, "servers": {}}
+
+
 def _read_pids(root: Path) -> dict[str, Any]:
+    """Read ``state/pids.json``, tolerating a missing or damaged file.
+
+    The file is only ever written by this app, but it is user-editable state:
+    a hand-edited, truncated or otherwise malformed payload must never crash
+    ``status`` / ``stop``. Anything that is not a JSON object — and any object
+    missing the two expected keys — falls back to :data:`_EMPTY_PIDS`.
+    """
     pids_path = root / PIDS_FILE
     if not pids_path.exists():
-        return {"llama_server": None, "servers": {}}
+        return dict(_EMPTY_PIDS)
     try:
-        data: dict[str, Any] = json.loads(pids_path.read_text(encoding="utf-8"))
-        return data
+        data: object = json.loads(pids_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"llama_server": None, "servers": {}}
+        return dict(_EMPTY_PIDS)
+    if not isinstance(data, dict):
+        return dict(_EMPTY_PIDS)
+    record = cast("dict[str, Any]", data)
+    raw_servers = record.get("servers")
+    servers = (
+        cast("dict[str, Any]", raw_servers) if isinstance(raw_servers, dict) else {}
+    )
+    return {"llama_server": record.get("llama_server"), "servers": servers}
 
 
 def _write_pids(root: Path, data: dict[str, Any]) -> None:

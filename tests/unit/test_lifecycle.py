@@ -14,6 +14,7 @@ from llamagui.lifecycle import (
     build_llama_server_args,
     launch_llama_server,
     read_log_tail,
+    running_pids,
     stop_processes,
     verify_launch,
     wait_for_port,
@@ -39,6 +40,70 @@ def test_read_pids_present(fake_root: Path) -> None:
     _write_pids(fake_root, data)
     loaded = _read_pids(fake_root)
     assert loaded == data
+
+
+def _write_raw_pids(fake_root: Path, text: str) -> None:
+    path = fake_root / "state" / "pids.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_read_pids_rejects_non_object_json(fake_root: Path) -> None:
+    """A hand-edited pids.json holding a list must not crash the engine.
+
+    Regression: json.loads happily returns a list, the old code passed it
+    through, and running_pids()/stop_processes() then died with
+    ``AttributeError: 'list' object has no attribute 'get'``.
+    """
+    _write_raw_pids(fake_root, "[1, 2]")
+    assert _read_pids(fake_root) == {"llama_server": None, "servers": {}}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['"a string"', "42", "null", "[1, 2]", "true"],
+)
+def test_read_pids_survives_any_non_object(fake_root: Path, payload: str) -> None:
+    _write_raw_pids(fake_root, payload)
+    pids = _read_pids(fake_root)
+    assert pids["llama_server"] is None
+    assert pids["servers"] == {}
+
+
+def test_read_pids_survives_truncated_json(fake_root: Path) -> None:
+    _write_raw_pids(fake_root, '{"llama_server": 42')
+    assert _read_pids(fake_root) == {"llama_server": None, "servers": {}}
+
+
+def test_read_pids_normalises_servers_type(fake_root: Path) -> None:
+    """``servers`` must be a dict; a list would break the ``.values()`` call."""
+    _write_raw_pids(fake_root, '{"llama_server": 5, "servers": [1, 2]}')
+    pids = _read_pids(fake_root)
+    assert pids["llama_server"] == 5
+    assert pids["servers"] == {}
+
+
+def test_running_pids_tolerates_malformed_file(fake_root: Path) -> None:
+    _write_raw_pids(fake_root, "[1, 2]")
+    assert running_pids(fake_root) == []
+
+
+def test_stop_processes_tolerates_malformed_file(fake_root: Path) -> None:
+    _write_raw_pids(fake_root, "[1, 2]")
+    result = stop_processes(fake_root)
+    assert result["stopped_pids"] == []
+
+
+def test_status_tolerates_malformed_pids_file(tmp_path: Path) -> None:
+    """The dashboard read path must survive a damaged pid file."""
+    from llamagui.config import AppConfig
+    from llamagui.orchestrator import Orchestrator
+
+    root = tmp_path / "llamagui"
+    (root / "state").mkdir(parents=True)
+    (root / "state" / "pids.json").write_text("[1, 2]", encoding="utf-8")
+    status = Orchestrator(AppConfig(root=str(root))).status()
+    assert status.server.pids == []
 
 
 def test_wait_for_port_open(port_server: int) -> None:
