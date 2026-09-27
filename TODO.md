@@ -135,10 +135,14 @@ reproduction — confirm before acting.
       the write count is far below the chunk count while the URL and final size
       are still recorded.
 
-- [ ] **`cached_download` treats a size match as a cache hit** —
-      `llamagui/backends/prebuilt.py`. If the release API reports an unexpected
-      `size`, a truncated or partial cached archive is accepted as valid. Verify
-      the archive actually opens before short-circuiting the download.
+- [x] ~~**`cached_download` treats a size match as a cache hit**~~ — **done**:
+      a cache hit now requires the expected size **and** an archive that
+      actually opens (`_is_readable_archive`, using `zipfile.is_zipfile` /
+      `tarfile.getmembers`). A cached file that does not open is deleted and
+      re-downloaded instead of being returned and failing later during
+      extraction. 2 new tests, both using a corrupt file of the *same length*
+      as the good archive, so they fail against the old size-only check.
+
 
 
 ## P2 — Test gaps

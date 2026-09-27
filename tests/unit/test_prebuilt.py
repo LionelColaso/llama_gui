@@ -307,16 +307,102 @@ def test_wipe_and_extract_emits_byte_progress(tmp_path: Path) -> None:
     assert events[-1][3] == 0.75  # reached the window's top
 
 
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    """A real zip archive in memory, so cache-hit checks exercise a real file."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
 # ─── Download cache ───────────────────────────────────────────────────────
 
 
 def test_cached_download_reuses_matching_size(tmp_path: Path) -> None:
+    """A cache hit needs the right size *and* an archive that opens."""
     cache_dir = tmp_path / "downloads"
     cache_dir.mkdir()
     existing = cache_dir / "existing.zip"
-    existing.write_bytes(b"cached content!")
-    result = cached_download("https://example.com/existing.zip", 15, cache_dir)
+    payload = _zip_bytes({"llama-server": b"cached content!"})
+    existing.write_bytes(payload)
+
+    downloaded: list[str] = []
+
+    def _record(url: str, *args: Any, **kwargs: Any) -> None:
+        downloaded.append(url)
+
+    with patch("llamagui.backends.prebuilt.download_file", side_effect=_record):
+        result = cached_download(
+            "https://example.com/existing.zip", len(payload), cache_dir
+        )
+
     assert result == existing
+    assert downloaded == [], "a valid cache hit must not re-download"
+
+
+def test_cached_download_redownloads_a_corrupt_cache_hit(tmp_path: Path) -> None:
+    """Regression: size alone accepted a corrupt file as a cache hit.
+
+    A file of the right length that is not a readable archive was returned as
+    a hit and only failed later, during extraction. It must now be discarded
+    and fetched again. The corrupt file is deliberately the *same size* as
+    the good one, since size is exactly what the old check trusted.
+    """
+    cache_dir = tmp_path / "downloads"
+    cache_dir.mkdir()
+    fresh = _zip_bytes({"llama-server": b"fresh"})
+
+    corrupt = cache_dir / "asset.zip"
+    corrupt.write_bytes(b"z" * len(fresh))  # right length, not a zip
+    assert corrupt.stat().st_size == len(fresh)
+
+    def fake_download(url: str, dest: Path, token: Any = None, **kw: Any) -> None:
+        dest.write_bytes(fresh)
+
+    with patch("llamagui.backends.prebuilt.download_file", side_effect=fake_download):
+        result = cached_download("https://example.com/asset.zip", len(fresh), cache_dir)
+
+    assert result.read_bytes() == fresh
+    assert zipfile.is_zipfile(result), "a corrupt cache hit must be re-downloaded"
+
+
+def test_cached_download_redownloads_a_corrupt_tar_gz(tmp_path: Path) -> None:
+    """Same for tar.gz, where a broken gzip stream raises EOFError.
+
+    The cached file keeps the good archive's length so that only its
+    *contents* differ -- otherwise the old size check would reject it anyway
+    and the test would prove nothing.
+    """
+    cache_dir = tmp_path / "downloads"
+    cache_dir.mkdir()
+    good = tmp_path / "good.tar.gz"
+    with tarfile.open(good, "w:gz") as tf:
+        info = tarfile.TarInfo("llama-server")
+        info.size = 5
+        tf.addfile(info, io.BytesIO(b"hello"))
+    full = good.read_bytes()
+
+    # Same length as the good archive, but the gzip payload is destroyed.
+    corrupt_bytes = bytearray(full)
+    for i in range(len(full) // 2, len(full)):
+        corrupt_bytes[i] ^= 0xFF
+    corrupt = cache_dir / "asset.tar.gz"
+    corrupt.write_bytes(bytes(corrupt_bytes))
+    assert corrupt.stat().st_size == len(full)
+
+    def fake_download(url: str, dest: Path, token: Any = None, **kw: Any) -> None:
+        dest.write_bytes(full)
+
+    with patch("llamagui.backends.prebuilt.download_file", side_effect=fake_download):
+        result = cached_download(
+            "https://example.com/asset.tar.gz", len(full), cache_dir
+        )
+
+    assert result.read_bytes() == full
+
+
+# ─── Install ──────────────────────────────────────────────────────────────
 
 
 def test_cached_download_redownloads_on_size_mismatch(tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ import threading
 import time
 import zipfile
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -232,6 +233,33 @@ def download_file(
         raise PrebuiltError(str(e)) from e
 
 
+def _is_readable_archive(path: Path) -> bool:
+    """True when ``path`` opens as a zip or tar.gz.
+
+    A cache hit is normally decided by byte count alone, which is unsafe: a
+    truncated download, a partially-written file, or a size that the API
+    reported incorrectly would all be accepted and then fail much later
+    during extraction, with a confusing error. Opening the container first
+    turns that into an ordinary re-download.
+    """
+    try:
+        if zipfile.is_zipfile(path):
+            return True
+    except OSError:
+        pass
+    try:
+        if _is_tar_gz(path):
+            with tarfile.open(path, "r:gz") as tf:
+                # getmembers forces the header/index to be read, so a truncated
+                # or corrupt archive fails here rather than mid-extraction.
+                return len(tf.getmembers()) >= 0
+    except (OSError, EOFError, tarfile.TarError):
+        # A truncated gzip stream surfaces as EOFError from the zlib layer,
+        # which is not an OSError or a TarError.
+        return False
+    return False
+
+
 def cached_download(
     url: str,
     size: int,
@@ -241,13 +269,24 @@ def cached_download(
     component: str = "download",
     overall_range: tuple[float, float] = (0.0, 1.0),
 ) -> Path:
-    """Download ``url`` unless a cached file of exactly ``size`` bytes exists."""
+    """Download ``url`` unless a valid cached copy already exists.
+
+    A cache hit requires both the expected byte count *and* an archive that
+    actually opens. Size alone is not proof: a truncated or half-written file
+    can match, and it would otherwise be accepted and fail later during
+    extraction with a misleading error. A cached file that does not open is
+    discarded and re-downloaded.
+    """
     name = url.rsplit("/", 1)[-1]
     cache_path = cache_dir / name
     lo, hi = overall_range
     if cache_path.exists() and cache_path.stat().st_size == size:
-        emit_progress(component, size, size, "cache hit", hi)
-        return cache_path
+        if _is_readable_archive(cache_path):
+            emit_progress(component, size, size, "cache hit", hi)
+            return cache_path
+        # Corrupt or partial: drop it and fall through to a fresh download.
+        with suppress(OSError):
+            cache_path.unlink()
     emit_progress(component, 0, size, "download", lo)
     download_file(
         url, cache_path, token, component=component, overall_range=overall_range
