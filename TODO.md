@@ -111,10 +111,14 @@ reproduction — confirm before acting.
       CLI use. 3 new tests, including a real SIGTERM-ignoring child that proves
       the short grace is actually honoured.
 
-- [ ] **`EngineWorker` action name is not validated** —
-      `llamagui/gui/worker_pool.py` does `getattr(self.orch, self._action)`, so a
-      typo surfaces as a runtime `AttributeError` inside a worker instead of a
-      clear error. Check the name against `llamagui.orchestrator.ACTIONS` first.
+- [x] ~~**`EngineWorker` action name is not validated**~~ — **done**:
+      `EngineWorker` now resolves its action through `_resolve_method()`, which
+      raises a clear `EngineError` naming the bad action and listing the valid
+      ones, instead of a bare `AttributeError` from inside the worker.
+      Validated against the orchestrator's **methods**, not `orchestrator.ACTIONS`
+      — that distinction matters (see below). 3 new tests, including a guard that
+      the GUI's method names are never mistaken for typos.
+
 - [ ] **First-run resume prompt blocks in a page constructor** —
       `llamagui/gui/pages/models.py` `ModelsPage.__init__` → `_offer_resume()`
       shows a modal `QMessageBox` per pending `.part` while the widget tree is

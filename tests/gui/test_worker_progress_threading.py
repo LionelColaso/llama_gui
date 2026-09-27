@@ -51,3 +51,70 @@ def test_progress_slot_runs_on_gui_thread(qtbot: QtBot) -> None:
     qtbot.waitUntil(released.is_set, timeout=10_000)
     assert released.is_set(), "progress tick was never delivered to the slot"
     assert off_thread == [], f"progress slot ran off the GUI thread: {off_thread}"
+
+
+# ─── action-name validation ────────────────────────────────────────────────
+
+
+class _StrictOrch:
+    """An orchestrator that does *not* auto-create missing attributes.
+
+    MagicMock fabricates any attribute, so it can never reproduce the
+    AttributeError a typo would cause against the real Orchestrator.
+    """
+
+    def status(self) -> str:
+        return "ok"
+
+
+def test_unknown_action_reports_a_clear_error() -> None:
+    """A typo must name the action and list the valid ones, not raise
+    a bare AttributeError from inside the worker."""
+    errors: list[str] = []
+    worker = EngineWorker(
+        cast("Orchestrator", _StrictOrch()),
+        "staus",  # typo for status
+    )
+    worker.signals.error.connect(errors.append)
+    worker.run_sync()
+
+    assert len(errors) == 1
+    assert "staus" in errors[0]
+    assert "Unknown action" in errors[0]
+    assert "status" in errors[0], "the error should list the valid actions"
+
+
+def test_known_action_still_runs() -> None:
+    finished: list[object] = []
+    worker = EngineWorker(cast("Orchestrator", _StrictOrch()), "status")
+    worker.signals.finished.connect(finished.append)
+    worker.run_sync()
+
+    assert finished == ["ok"]
+
+
+def test_gui_action_names_are_not_mistaken_for_typos() -> None:
+    """Regression: the GUI passes method names, not the CLI's hyphenated ones.
+
+    orchestrator.ACTIONS holds "list-models"; the GUI calls list_models, and
+    several methods (log_tail, set_active_model) are not CLI actions at all.
+    Validating against ACTIONS would have broken seven real GUI actions.
+    """
+    from llamagui.orchestrator import ACTIONS, Orchestrator
+
+    gui_actions = [
+        "list_models",
+        "pending_downloads",
+        "discard_download",
+        "set_active_model",
+        "remove_model",
+        "download_model",
+        "log_tail",
+    ]
+    for action in gui_actions:
+        assert hasattr(Orchestrator, action), f"{action} is not an orchestrator method"
+        assert callable(getattr(Orchestrator, action))
+
+    # And they are deliberately *not* all in the CLI's ACTIONS tuple.
+    assert "list-models" in ACTIONS
+    assert "list_models" not in ACTIONS

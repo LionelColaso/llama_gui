@@ -8,6 +8,7 @@ from loguru import logger
 from PySide6.QtCore import QObject, QRunnable, Signal, SignalInstance
 
 from ..orchestrator import Orchestrator
+from ..schemas import EngineError, ExitCode
 
 
 class WorkerSignals(QObject):
@@ -51,7 +52,7 @@ class EngineWorker(QRunnable):
     def _execute_action(self) -> None:
         """Invoke the orchestrator action and emit finished/error signals."""
         try:
-            method = getattr(self.orch, self._action)
+            method = self._resolve_method()
             result = method(**self._kwargs)
             self._emit(self.signals.finished, result)
         except Exception as e:  # noqa: BLE001 - forward any worker error to the UI
@@ -61,6 +62,38 @@ class EngineWorker(QRunnable):
                 "worker action '{}' failed: {}", self._action, e
             )
             self._emit(self.signals.error, f"{type(e).__name__}: {e}")
+
+    def _resolve_method(self) -> Any:
+        """Look up the orchestrator method for this action, with a clear error.
+
+        A bare ``getattr`` turns a typo into an opaque ``AttributeError`` from
+        inside the worker, which reads as an engine failure rather than the
+        caller's mistake. When the attribute is missing the available actions
+        are listed in the message.
+
+        Note this deliberately checks the *orchestrator's methods*, not
+        ``orchestrator.ACTIONS``: ACTIONS holds the CLI's hyphenated action
+        names (``list-models``), while the GUI passes real method names
+        (``list_models``), and several methods (``log_tail``,
+        ``set_active_model``) are not CLI actions at all.
+        """
+        method = getattr(self.orch, self._action, None)
+        if callable(method):
+            return method
+        raise EngineError(
+            ExitCode.BAD_ARGUMENT,
+            f"Unknown action '{self._action}'. "
+            f"Available: {', '.join(self._known_actions())}",
+        )
+
+    def _known_actions(self) -> list[str]:
+        """Public, callable orchestrator methods, for the error message."""
+        return sorted(
+            name
+            for name in dir(type(self.orch))
+            if not name.startswith("_")
+            and callable(getattr(type(self.orch), name, None))
+        )
 
     @staticmethod
     def _emit(signal: SignalInstance, value: object) -> None:
