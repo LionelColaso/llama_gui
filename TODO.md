@@ -84,12 +84,15 @@ reproduction — confirm before acting.
       show it. 14 new tests cover the ranges, the warnings, and that in-range
       values (including `ctx_size: 0`) stay untouched.
 
-- [ ] **"Ready" only means "a file exists"** — `llamagui/orchestrator.py`
-      `status()` sets `ready=bool(server.path)`. `MainWindow._maybe_first_run`
-      keys off `ready`, so a present-but-broken binary (wrong arch, missing CUDA
-      runtime, quarantine xattr) suppresses the first-run dialog and leaves the
-      user with a dead UI. Re-check validity, or surface the resolver error,
-      before marking ready.
+- [x] ~~**"Ready" only means "a file exists"**~~ — **done**:
+      added `Orchestrator.first_run_needed()`, which resolves with
+      `validate=True` so the first-run decision is based on a binary that
+      actually runs, not just one that exists. `MainWindow._maybe_first_run`
+      now uses it instead of `status().ready`. The probe runs once at startup
+      (not on the dashboard poll, which keeps `status()` subprocess-free).
+      5 new tests, plus the GUI `fake_orch` fixture now stubs the probe so the
+      suite does not spawn a real binary.
+
 - [ ] **Recursive model scan on every dashboard poll** — `status()` calls
       `list_models()`, which `rglob`s the entire models directory, and the
       Dashboard refresh timer fires every few seconds. With a large `.gguf`

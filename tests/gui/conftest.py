@@ -50,6 +50,10 @@ def fake_orch() -> MagicMock:
         start_minimized=d["start_minimized"],
         theme=d["theme"],
     )
+    # MainWindow's startup first-run check calls this through a QTimer. Default
+    # it to "not needed" so no test triggers a real binary probe (--version);
+    # the dialog itself is not what these tests are about.
+    orch.first_run_needed.return_value = False
     return orch
 
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import (
@@ -145,17 +143,16 @@ class MainWindow(QWidget):
         return tray
 
     def _maybe_first_run(self) -> None:
-        """Show the setup dialog when the app has nothing to run yet."""
-        if getattr(self._orch.cfg, "first_run_complete", False):
-            return
-        try:
-            status: Any = self._orch.status()
-            ready = bool(getattr(status, "ready", False))
-        except Exception:  # noqa: BLE001 - never block startup on a status error
-            return
-        if ready:
-            return
-        FirstRunDialog(self._orch, self).exec()
+        """Show the setup dialog when the app has nothing it can actually run.
+
+        Uses ``first_run_needed()`` rather than ``status().ready``: ready only
+        means a file exists, so a broken binary (wrong arch, missing CUDA
+        runtime, quarantine) would otherwise suppress the dialog and leave the
+        user with no way forward. The validating probe runs once here, not on
+        the dashboard's poll.
+        """
+        if self._orch.first_run_needed():
+            FirstRunDialog(self._orch, self).exec()
         self._backends.start_refresh()
 
     def _switch_page(self, index: int) -> None:

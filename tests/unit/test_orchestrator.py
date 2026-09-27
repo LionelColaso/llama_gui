@@ -39,6 +39,70 @@ def test_describe_marks_unavailable_backends(tmp_path: Path) -> None:
     assert by_name[unusable].unavailable_reason
 
 
+# ─── first_run_needed validates, unlike status().ready ──────────────────────
+
+
+def _resolved(path: str | None, valid: bool) -> ResolvedBinary:
+    return ResolvedBinary(path, None, "b1" if valid else None, valid, None)
+
+
+def test_first_run_needed_when_nothing_resolves(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with patch(
+        "llamagui.orchestrator.resolve_llama_server",
+        return_value=_resolved(None, False),
+    ):
+        assert orch.first_run_needed() is True
+
+
+def test_first_run_needed_when_binary_exists_but_cannot_run(tmp_path: Path) -> None:
+    """Regression: a present-but-broken binary used to read as ready.
+
+    ``status().ready`` is only an existence check, so keying the dialog off it
+    suppressed setup for a binary that cannot run (wrong arch, missing CUDA
+    runtime, quarantine), stranding the user in a dead UI.
+    """
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    exists_but_broken = "/does/not/matter/llama-server"
+    with patch(
+        "llamagui.orchestrator.resolve_llama_server",
+        return_value=_resolved(exists_but_broken, False),
+    ):
+        assert orch.first_run_needed() is True
+
+
+def test_first_run_not_needed_for_a_working_binary(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with patch(
+        "llamagui.orchestrator.resolve_llama_server",
+        return_value=_resolved("/x/llama-server", True),
+    ):
+        assert orch.first_run_needed() is False
+
+
+def test_first_run_not_needed_once_complete(tmp_path: Path) -> None:
+    """An explicit skip must stick, with no binary probe performed."""
+    cfg = AppConfig(root=str(tmp_path), first_run_complete=True)
+    orch = Orchestrator(cfg)
+
+    def _boom(*args: object, **kwargs: object) -> ResolvedBinary:
+        raise AssertionError("first_run_needed must not probe once complete")
+
+    with patch("llamagui.orchestrator.resolve_llama_server", _boom):
+        assert orch.first_run_needed() is False
+
+
+def test_first_run_needed_survives_a_probe_error(tmp_path: Path) -> None:
+    """A crashing probe must still offer setup, not silence it."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+
+    def _boom(*args: object, **kwargs: object) -> ResolvedBinary:
+        raise RuntimeError("probe exploded")
+
+    with patch("llamagui.orchestrator.resolve_llama_server", _boom):
+        assert orch.first_run_needed() is True
+
+
 def test_describe_defaults(tmp_path: Path) -> None:
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)

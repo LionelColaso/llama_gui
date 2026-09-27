@@ -194,6 +194,28 @@ class Orchestrator:
             first_run_complete=self.cfg.first_run_complete,
         )
 
+    def first_run_needed(self) -> bool:
+        """Whether the first-run setup dialog should be shown.
+
+        Unlike :meth:`status`, this is allowed to *run* the binary: it is
+        called once at startup rather than on every dashboard poll, so the
+        ``--version`` subprocess is affordable here and nowhere else.
+
+        ``status.ready`` only means "a file exists at the expected path", so
+        keying the dialog off it would suppress setup for a binary that
+        cannot actually run -- wrong architecture, missing CUDA runtime, or
+        still quarantined on macOS -- leaving the user in a dead UI with no
+        offered way out. Verifying first means the dialog appears precisely
+        when the app is genuinely unusable.
+        """
+        if self.cfg.first_run_complete:
+            return False
+        try:
+            resolved = resolve_llama_server(self.cfg, validate=True)
+        except Exception:  # noqa: BLE001 - a probe failure must not block startup
+            return True
+        return not (resolved.path and resolved.valid)
+
     def resolve(self) -> ResolveData:
         """Authoritative resolution: runs the binary to confirm it works."""
         return ResolveData(
