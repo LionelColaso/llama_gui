@@ -601,7 +601,13 @@ class Orchestrator:
         if canon in DEDICATED_FLAGS:
             self.save_config(self._dedicated_values_for_set(canon, value))
         else:
-            normalized = validate_value(arg, value)
+            try:
+                normalized = validate_value(arg, value)
+            except ValueError as e:
+                # The CLI/GUI contract is EngineError with a documented exit
+                # code; a bare ValueError would surface as UNEXPECTED_ERROR
+                # and read like an engine failure rather than bad input.
+                raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
             options = dict(self.cfg.server_options)
             if normalized:
                 options[canon] = normalized

@@ -158,10 +158,17 @@ reproduction — confirm before acting.
       `validate_options` / `count`. The catalogue itself turned out to be clean,
       so no data changes were needed.
 
-- [ ] **No orchestrator tests for the server-arg actions** —
-      `describe_server_args` / `set_server_arg` / `clear_server_args` have zero
-      coverage, including the dedicated-flag path (`--port`, `--ctx-size`,
-      `--n-gpu-layers` → `AppConfig` fields) and the `volatile` rejection.
+- [x] ~~**No orchestrator tests for the server-arg actions**~~ — **done**:
+      24 tests covering `describe_server_args` (full catalogue, row metadata,
+      filtering by flag and by alias, values from `server_options` and from the
+      dedicated config fields), `set_server_arg` (normalisation, alias → canonical
+      field, blank resets, unknown/volatile/invalid rejection, returns the updated
+      row) and `clear_server_args` (empties the map, leaves host/port alone), plus
+      an end-to-end check that a set option reaches the built command line. The
+      work also **fixed a real bug**: `set_server_arg` let a raw `ValueError`
+      escape from `validate_value`, so bad input surfaced as exit 1
+      (`UNEXPECTED_ERROR`) instead of 5 (`BAD_ARGUMENT`).
+
 - [ ] **No tests for `llamagui/model_store.py`** — `list_models` (recursive scan,
       hidden-dir skip, sorting), `model_name_from_url` (query strings, HF
       `resolve/main/...`, no-asset fallback) and `remove_model` path-traversal

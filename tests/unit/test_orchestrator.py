@@ -5,6 +5,7 @@ import platform as _platform
 import threading
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +14,7 @@ from llamagui.config import AppConfig
 from llamagui.locking import LockAcquisitionError, mutation_lock
 from llamagui.orchestrator import Orchestrator
 from llamagui.resolver import ResolvedBinary
+from llamagui.schemas import EngineError
 
 _SYSTEM = _platform.system().lower()
 _EXE_SUFFIX = ".exe" if _SYSTEM == "windows" else ""
@@ -461,3 +463,165 @@ def test_restart_does_not_reenter_the_lock(tmp_path: Path) -> None:
     assert len(acquires) == 1, (
         f"restart acquired the lock {len(acquires)} times, expected 1"
     )
+
+
+# ─── server-arg actions ───────────────────────────────────────────────────
+
+
+def _row(result: dict[str, Any], index: int = 0) -> dict[str, Any]:
+    """The nth option row of a describe_server_args() result."""
+    args: list[dict[str, Any]] = result["args"]
+    return args[index]
+
+
+def test_describe_server_args_lists_the_whole_catalogue(tmp_path: Path) -> None:
+    from llamagui.serverargs import SERVER_ARGS
+
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    result = orch.describe_server_args()
+    assert result["count"] == len(SERVER_ARGS)
+    assert len(result["args"]) == len(SERVER_ARGS)
+
+
+def test_describe_server_args_carries_row_metadata(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    row = _row(orch.describe_server_args("--jinja"))
+    for key in ("flag", "section", "kind", "help", "value", "volatile"):
+        assert key in row, f"row is missing {key}"
+    assert row["flag"] == "--jinja"
+
+
+def test_describe_server_args_filters_by_flag(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    result = orch.describe_server_args("--jinja")
+    assert result["count"] == 1
+    assert result["args"][0]["flag"] == "--jinja"
+
+
+def test_describe_server_args_resolves_an_alias(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    assert orch.describe_server_args("-c")["args"][0]["flag"] == "--ctx-size"
+
+
+def test_describe_server_args_reflects_configured_values(tmp_path: Path) -> None:
+    cfg = AppConfig(root=str(tmp_path), server_options={"--jinja": "on"})
+    orch = Orchestrator(cfg)
+    assert _row(orch.describe_server_args("--jinja"))["value"] == "on"
+
+
+def test_describe_server_args_reads_dedicated_values_from_config(
+    tmp_path: Path,
+) -> None:
+    """--port is a dedicated flag; its value comes from cfg.port."""
+    cfg = AppConfig(root=str(tmp_path), port=9999, host="0.0.0.0")
+    orch = Orchestrator(cfg)
+    assert _row(orch.describe_server_args("--port"))["value"] == "9999"
+    assert _row(orch.describe_server_args("--host"))["value"] == "0.0.0.0"
+
+
+def test_set_server_arg_stores_a_normalised_value(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    orch.set_server_arg("--jinja", "TRUE")
+    assert orch.cfg.server_options["--jinja"] == "on"
+
+
+def test_set_server_arg_accepts_an_alias(tmp_path: Path) -> None:
+    """Setting by alias must update the canonical field, not store the alias."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    orch.set_server_arg("-c", "8192")
+    assert "--ctx-size" not in orch.cfg.server_options
+    assert orch.cfg.ctx_size == 8192, "a dedicated alias must update the config field"
+
+
+def test_set_server_arg_rejects_unknown_flags(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with pytest.raises(EngineError, match="Unknown option"):
+        orch.set_server_arg("--not-real", "1")
+
+
+def test_set_server_arg_rejects_volatile_flags(tmp_path: Path) -> None:
+    """--help prints and exits; passing it to a running server is meaningless."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with pytest.raises(EngineError, match="one-shot"):
+        orch.set_server_arg("--help", "on")
+
+
+def test_set_server_arg_rejects_an_invalid_value(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    with pytest.raises(EngineError):
+        orch.set_server_arg("--jinja", "perhaps")
+
+
+@pytest.mark.parametrize("reset_value", ["", "   "])
+def test_setting_a_blank_value_resets_the_option(
+    tmp_path: Path, reset_value: str
+) -> None:
+    cfg = AppConfig(root=str(tmp_path), server_options={"--jinja": "on"})
+    orch = Orchestrator(cfg)
+    orch.set_server_arg("--jinja", reset_value)
+    assert "--jinja" not in orch.cfg.server_options
+
+
+def test_set_dedicated_port_updates_the_config_field(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path), port=8080))
+    orch.set_server_arg("--port", "9000")
+    assert orch.cfg.port == 9000
+
+
+def test_set_dedicated_host_updates_the_config_field(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    orch.set_server_arg("--host", "0.0.0.0")
+    assert orch.cfg.host == "0.0.0.0"
+
+
+def test_set_dedicated_n_gpu_layers_updates_the_config_field(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    orch.set_server_arg("--n-gpu-layers", "33")
+    assert orch.cfg.n_gpu_layers == 33
+
+
+def test_set_dedicated_ctx_size_updates_the_config_field(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+    orch.set_server_arg("--ctx-size", "16384")
+    assert orch.cfg.ctx_size == 16384
+
+
+def test_dedicated_values_are_not_stored_in_server_options(tmp_path: Path) -> None:
+    """Dedicated flags live in their own AppConfig fields, not the options map."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    orch.set_server_arg("--port", "9000")
+    assert orch.cfg.server_options == {}
+
+
+def test_set_server_arg_returns_the_updated_row(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    result = orch.set_server_arg("--jinja", "on")
+    assert result["count"] == 1
+    assert result["args"][0]["value"] == "on"
+
+
+def test_clear_server_args_resets_every_option(tmp_path: Path) -> None:
+    cfg = AppConfig(
+        root=str(tmp_path),
+        server_options={"--jinja": "on", "--cache-prompt": "on"},
+    )
+    orch = Orchestrator(cfg)
+    orch.clear_server_args()
+    assert orch.cfg.server_options == {}
+
+
+def test_clear_server_args_leaves_dedicated_fields_alone(tmp_path: Path) -> None:
+    """Clearing the catalogue must not reset host/port/ctx/ngl."""
+    cfg = AppConfig(root=str(tmp_path), port=9000, host="0.0.0.0")
+    orch = Orchestrator(cfg)
+    orch.clear_server_args()
+    assert orch.cfg.port == 9000
+    assert orch.cfg.host == "0.0.0.0"
+
+
+def test_server_options_reach_the_command_line(tmp_path: Path) -> None:
+    """The whole point: a set option must appear in the built command line."""
+    cfg = AppConfig(root=str(tmp_path), server_options={"--jinja": "on"})
+    orch = Orchestrator(cfg)
+    cmd = orch._server_args_for("llama-server", str(tmp_path / "m.gguf"))
+    assert "--jinja" in cmd
