@@ -34,7 +34,7 @@ test-all:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Run the full check suite: ruff format --check, ruff check, mypy, pyright,
-# jscpd, actionlint, pytest (order per Agent.md §12.3). Each recipe is individually runnable.
+# jscpd, actionlint, pytest (order per AGENTS.md §15). Each recipe is individually runnable.
 check: ruff-format-check ruffcheck typecheck jscpd actionlint test-verbose
 
 # Verify formatting without modifying files (ruff format --check)
@@ -116,3 +116,9 @@ build-help:
 # Print file / LOC / test counts
 stats:
     uv run python scripts/stats.py
+
+# Diff the serverargs catalogue against llama-server --help. Pass a real binary
+# with `just check-server-args --binary <path>`; the default checks the
+# committed docs/reference snapshot.
+check-server-args *ARGS='':
+    uv run python scripts/check_server_args.py {{ARGS}}

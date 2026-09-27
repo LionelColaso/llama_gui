@@ -1,7 +1,7 @@
 """Domain types: the backend catalogue and the PROGRESS line protocol.
 
 The backend catalogue is **data**, not code paths: adding a backend means
-adding one :class:`Backend` row (invariant #10 in ``Agent.md``). Every consumer
+adding one :class:`Backend` row (invariant #2 in ``AGENTS.md``). Every consumer
 — resolver, prebuilt downloader, CLI ``describe``, GUI — reads this table, so
 Windows, Linux and macOS stay consistent with a single edit.
 """

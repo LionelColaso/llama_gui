@@ -74,7 +74,8 @@ just fix                   # auto-fix formatting + lint
 ## Documentation
 
 - [`docs/BUILD.md`](docs/BUILD.md) — Python/PySide6/Nuitka triple, resolver design, toolchain decisions.
-- [`AGENTS.md`](AGENTS.md) — design spec, invariants, and current implementation status.
+- [`AGENTS.md`](AGENTS.md) — design spec and invariants.
+- [`TODO.md`](TODO.md) — known bugs, gaps and planned work.
 - [`mapping.md`](mapping.md) — generated file/folder tree (`uv run python scripts/mapping.py`).
 
 ## Logs
