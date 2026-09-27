@@ -193,9 +193,16 @@ reproduction — confirm before acting.
       `path`, silently dropping the resolver's `error` — so a binary that was
       found but could not be validated was reported as missing.
 
-- [ ] **No test for `main_window._maybe_first_run`** — the ready/skip decision
-      and `first_run_complete` persistence are untested. Add a test that the
-      dialog is skipped when `ready` and shown when it is not.
+- [x] ~~**No test for `main_window._maybe_first_run`**~~ — **done**: new
+      `tests/gui/test_first_run.py` (11 tests) covering the decision against the
+      real `Orchestrator` (prompt when nothing resolves, when a binary exists but
+      cannot run, not when it works, and not once `first_run_complete` is set — the
+      last asserting the binary is *not* probed at all) and the dialog's exits
+      (skip persists, use-OS enables the toggle, a button disables so it cannot
+      double-save, a successful download closes, a failed one stays open with
+      its message, a worker error is shown and Retry is re-enabled, and choosing
+      the OS install verifies it actually resolved).
+
 - [ ] **`scripts/` is untested and `stats.py` walks `.venv`** —
       `scripts/mapping.py`, `stats.py` and `clean.py` have no coverage;
       `scripts/stats.py::_iter_source_files` has a dead
