@@ -127,11 +127,14 @@ reproduction — confirm before acting.
       on a yes/no answer. 2 new tests: the constructor must not prompt, and the
       prompt must fire exactly once on first show.
 
-- [ ] **Download meta sidecar is written on the hot path** — `llamagui/download.py`
-      rewrites `<name>.part.meta` inside the chunk loop *(unverified: confirm the
-      write cadence)*. For multi-GB downloads that is a lot of small synchronous
-      writes on the hot path. Throttle to ~1 Hz and fsync only on phase
-      transitions.
+- [x] ~~**Download meta sidecar is written on the hot path**~~ — **done**:
+      confirmed the suspicion — `_write_meta` ran once per chunk (501 writes for
+      a 500-chunk download). Sidecar writes are now throttled to
+      `_META_WRITE_INTERVAL` (1 s) inside the chunk loop, with an unconditional
+      final write so the recorded byte count is still exact. 1 new test asserts
+      the write count is far below the chunk count while the URL and final size
+      are still recorded.
+
 - [ ] **`cached_download` treats a size match as a cache hit** —
       `llamagui/backends/prebuilt.py`. If the release API reports an unexpected
       `size`, a truncated or partial cached archive is accepted as valid. Verify

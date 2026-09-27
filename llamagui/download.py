@@ -127,6 +127,15 @@ def _meta_path(part: Path) -> Path:
     return part.with_suffix(part.suffix + ".meta")
 
 
+#: Minimum seconds between ``.part.meta`` writes while streaming. The sidecar
+#: records the URL and progress so a later run can offer to resume; rewriting a
+#: temp file and replacing it on every chunk meant thousands of small
+#: synchronous writes for a multi-GB model. Throttling to ~1 Hz keeps the resume
+#: record essentially as accurate (resume only needs the URL to match, and the
+#: byte count is re-derived from the .part size) while removing the hot-path I/O.
+_META_WRITE_INTERVAL = 1.0
+
+
 def _write_meta(meta: Path, url: str, total: int, done: int) -> None:
     tmp = meta.with_suffix(meta.suffix + ".tmp")
     tmp.write_text(
@@ -283,6 +292,7 @@ def stream_download(
 
                 done = offset
                 mode = "ab" if offset else "wb"
+                last_meta = 0.0
                 with part.open(mode, buffering=chunk_size) as handle:
                     for chunk in resp.iter_bytes(chunk_size):
                         if control is not None:
@@ -293,7 +303,14 @@ def stream_download(
                             continue
                         handle.write(chunk)
                         done += len(chunk)
-                        _write_meta(meta, url, total, done)
+                        # Throttled: the sidecar is a resume hint, not a
+                        # progress log, and resume re-derives the byte count
+                        # from the .part size. Writing it per chunk meant
+                        # thousands of temp-file writes for a multi-GB model.
+                        now = time.monotonic()
+                        if now - last_meta >= _META_WRITE_INTERVAL:
+                            _write_meta(meta, url, total, done)
+                            last_meta = now
                         emit(
                             component,
                             done,
@@ -301,6 +318,9 @@ def stream_download(
                             "download",
                             _overall(done, total, lo, hi),
                         )
+                    # Always record the final count, even if the last chunk
+                    # landed inside the throttle window.
+                    _write_meta(meta, url, total, done)
                 part.replace(dest)
                 meta.unlink(missing_ok=True)
                 return dest

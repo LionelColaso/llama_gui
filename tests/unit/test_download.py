@@ -11,6 +11,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from llamagui import download as download_mod
 from llamagui.download import (
     DownloadControl,
     discard_pending,
@@ -69,6 +70,38 @@ class _FakeResp:
 
     def iter_bytes(self, chunk_size: int = 65536) -> Iterator[bytes]:
         return iter(self._chunks)
+
+
+def test_meta_sidecar_is_not_written_per_chunk(tmp_path: Path) -> None:
+    """Regression: the .part.meta sidecar was rewritten on every chunk.
+
+    A temp-file write plus a replace per chunk is thousands of small
+    synchronous writes for a multi-GB model, all on the download hot path.
+    It is a resume *hint*, not a progress log, so it is throttled.
+    """
+    writes: list[tuple[str, int]] = []
+    real_write_meta = download_mod._write_meta
+
+    def _spy(meta: Path, url: str, total: int, done: int) -> None:
+        writes.append((url, done))
+        real_write_meta(meta, url, total, done)
+
+    chunks = tuple(b"x" * 1024 for _ in range(500))
+    resp = _FakeResp(chunks=chunks)
+    with (
+        patch.object(download_mod, "_write_meta", _spy),
+        patch("httpx.stream", return_value=resp),
+    ):
+        stream_download("https://example.com/big.bin", tmp_path / "out.bin")
+
+    assert len(writes) < len(chunks), (
+        f"sidecar written {len(writes)}x for {len(chunks)} chunks"
+    )
+    # The URL must still be recorded, so a later run can offer to resume.
+    assert writes, "the sidecar must still be written at least once"
+    assert writes[0][0] == "https://example.com/big.bin"
+    # ...and the final write records the complete byte count.
+    assert writes[-1][1] == 500 * 1024
 
 
 def test_transient_failure_retries_then_succeeds(tmp_path: Path) -> None:
