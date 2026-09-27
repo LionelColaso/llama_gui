@@ -270,10 +270,12 @@ reproduction — confirm before acting.
       exact match**. The module docstring now records when the snapshot was
       taken and how to refresh it.
 
-- [ ] **Snapshot is older than the toolchain** — `serverargs.py` pins the
-      snapshot to b10488 / commit 9d77fa172, but a current binary already differs
-      (see above). Record the version the snapshot came from in the file header
-      when refreshing, so the next diff has a baseline to compare against.
+- [x] ~~**Snapshot is older than the toolchain**~~ — **done** (folded into the
+      catalogue refresh): the snapshot is now captured from the current binary and
+      `serverargs.py`'s docstring records the capture date, the source build, and
+      the exact command to refresh and re-diff it, replacing the stale
+      `b10488 / 9d77fa172` reference that gave no way to resync.
+
 - [x] ~~**`EngineError` exit codes are a coarse bucket**~~ — **done**:
       `cli.main()` now maps `FileNotFoundError`, `PermissionError` and
       `NotADirectoryError` to `NOT_AVAILABLE` (2) with a plain-language message
