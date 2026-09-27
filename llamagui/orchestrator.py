@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .backends.prebuilt import (
+    clear_release_cache,
     install_backend,
     list_assets,
 )
@@ -242,6 +243,11 @@ class Orchestrator:
         backends: list[str] | None = None,
         force: bool = True,
     ) -> InstallData:
+        # An update is explicitly a request for the *newest* release, so any
+        # cached metadata is dropped first: a long-running GUI (auto_update on a
+        # timer) would otherwise keep re-resolving whatever was fetched at
+        # startup and never notice a newly published release.
+        clear_release_cache()
         with mutation_lock(self.root):
             return self._do_install(backends, force)
 

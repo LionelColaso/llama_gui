@@ -6,6 +6,7 @@ import stat
 import sys
 import tarfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar, Self
 from unittest.mock import MagicMock, patch
@@ -17,9 +18,11 @@ from llamagui.backends.prebuilt import (
     PrebuiltUnavailable,
     backend_asset_pattern,
     cached_download,
+    clear_release_cache,
     download_file,
     install_backend,
     installed_backends,
+    latest_release,
     match_asset,
     wipe_and_extract,
 )
@@ -476,3 +479,120 @@ def test_download_emits_progress_without_content_length(tmp_path: Path) -> None:
     assert all(c[2] == 0 for c in captured)  # total is unknown (0)
     assert all(c[4] is None for c in captured)  # no overall without Content-Length
     assert captured[-1][1] == len(b"hello world")  # final done == full size
+
+
+# ─── Release metadata caching ──────────────────────────────────────────────
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+@pytest.fixture(autouse=True)
+def _clear_release_cache() -> Iterator[None]:
+    clear_release_cache()
+    yield
+    clear_release_cache()
+
+
+def test_release_is_cached_within_the_ttl() -> None:
+    """One install run asks once per backend; it must not re-fetch each time."""
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse({"tag_name": "b1"})
+
+    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("o/r")["tag_name"] == "b1"
+        assert latest_release("o/r")["tag_name"] == "b1"
+        assert latest_release("o/r")["tag_name"] == "b1"
+
+    assert len(calls) == 1, "release metadata was re-fetched inside the TTL"
+
+
+def test_release_refetches_after_the_ttl() -> None:
+    """Regression: the cache used to live for the whole process, so a
+    long-running GUI could never observe a newly published release."""
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse({"tag_name": f"b{len(calls)}"})
+
+    with (
+        patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get),
+        patch("llamagui.backends.prebuilt.RELEASE_CACHE_TTL", 0.0),
+    ):
+        assert latest_release("o/r")["tag_name"] == "b1"
+        assert latest_release("o/r")["tag_name"] == "b2"
+
+    assert len(calls) == 2, "an expired entry must be re-fetched"
+
+
+def test_clear_release_cache_forces_a_refetch() -> None:
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse({"tag_name": f"b{len(calls)}"})
+
+    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("o/r")["tag_name"] == "b1"
+        clear_release_cache()
+        assert latest_release("o/r")["tag_name"] == "b2"
+
+    assert len(calls) == 2
+
+
+def test_cache_is_keyed_per_repo_and_token() -> None:
+    """A different repo (or token) must not read another's cached entry."""
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        # .../repos/<owner>/<name>/releases/latest -> "<owner>/<name>"
+        repo = url.split("/repos/", 1)[-1].split("/releases/", 1)[0]
+        calls.append(repo)
+        return _FakeResponse({"tag_name": repo})
+
+    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("o/one")["tag_name"] == "o/one"
+        assert latest_release("o/two")["tag_name"] == "o/two"
+        assert latest_release("o/one", "tok")["tag_name"] == "o/one"
+        # ...and each is still served from cache on a repeat.
+        assert latest_release("o/one")["tag_name"] == "o/one"
+        assert latest_release("o/two")["tag_name"] == "o/two"
+
+    # three distinct keys: (o/one, None), (o/two, None), (o/one, "tok")
+    assert calls == ["o/one", "o/two", "o/one"]
+
+
+def test_update_drops_the_cached_release(tmp_path: Path) -> None:
+    """``update`` is an explicit request for the newest release, so it must
+    not resolve the metadata cached at startup."""
+    from llamagui.config import AppConfig
+    from llamagui.orchestrator import Orchestrator
+    from llamagui.schemas import EngineError
+
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse({"tag_name": "b1", "assets": []})
+
+    # Seed the cache, then confirm update() re-fetches rather than reusing it.
+    # The empty asset list makes the run fail (no asset matches the backend),
+    # which is fine: only the fetch behaviour is under test.
+    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+        latest_release("ggml-org/llama.cpp")
+        before = len(calls)
+        with pytest.raises((EngineError, PrebuiltError)):
+            Orchestrator(AppConfig(root=str(tmp_path))).update()
+        assert len(calls) > before, "update() reused the stale cached release"

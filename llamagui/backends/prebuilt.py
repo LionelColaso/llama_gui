@@ -8,12 +8,12 @@ in a way that survives POSIX packaging conventions (executable bits, symlinked
 
 from __future__ import annotations
 
-import functools
 import re
 import shutil
 import stat
 import sys
 import tarfile
+import time
 import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -129,15 +129,19 @@ class _ExtractProgress:
     # ─── GitHub API x ──────────────────────────────────────────────────────────
 
 
-@functools.lru_cache(maxsize=32)
-def latest_release(repo: str, token: str | None = None) -> dict[str, Any]:
-    """Return the latest GitHub release for ``repo``.
+#: How long a fetched release stays fresh, in seconds. A single install/update
+#: run asks for the same release once per backend, so the cache exists purely to
+#: avoid redundant round-trips (the API rate-limits unauthenticated callers).
+#: It must expire, though: the app is a long-lived GUI and ``auto_update`` runs
+#: on a timer, so a cache that never expired would pin "latest" to whatever was
+#: fetched on the first call for the whole session.
+RELEASE_CACHE_TTL = 300.0
 
-    Memoized per ``(repo, token)`` for the process lifetime: a single
-    install/update run can request the same release several times (once per
-    backend), and the GitHub API rate-limits unauthenticated callers, so caching
-    avoids redundant network round-trips.
-    """
+#: ``(repo, token) -> (fetched_at, payload)``.
+_RELEASE_CACHE: dict[tuple[str, str | None], tuple[float, dict[str, Any]]] = {}
+
+
+def _fetch_release(repo: str, token: str | None) -> dict[str, Any]:
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
     if token:
@@ -148,6 +152,35 @@ def latest_release(repo: str, token: str | None = None) -> dict[str, Any]:
         return dict(resp.json())
     except httpx.HTTPError as e:
         raise PrebuiltError(f"GitHub API error for {repo}: {e}") from e
+
+
+def clear_release_cache() -> None:
+    """Drop every cached release so the next call hits the network.
+
+    Used by ``update``/``use --auto-install``, which must observe a release
+    published after the app started rather than whatever was cached at launch.
+    """
+    _RELEASE_CACHE.clear()
+
+
+def latest_release(repo: str, token: str | None = None) -> dict[str, Any]:
+    """Return the latest GitHub release for ``repo``, cached for a short while.
+
+    Memoized per ``(repo, token)`` for :data:`RELEASE_CACHE_TTL` seconds: one
+    install/update run requests the same release several times (once per
+    backend) and the API rate-limits unauthenticated callers, but the entry must
+    expire so a long-running GUI notices newly published releases.
+    """
+    key = (repo, token)
+    now = time.monotonic()
+    cached = _RELEASE_CACHE.get(key)
+    if cached is not None:
+        fetched_at, payload = cached
+        if now - fetched_at < RELEASE_CACHE_TTL:
+            return payload
+    payload = _fetch_release(repo, token)
+    _RELEASE_CACHE[key] = (now, payload)
+    return payload
 
 
 def match_asset(assets: list[dict[str, Any]], pattern: str) -> dict[str, Any] | None:
@@ -652,6 +685,7 @@ __all__ = [
     "PrebuiltUnavailable",
     "backend_asset_pattern",
     "cached_download",
+    "clear_release_cache",
     "download_file",
     "emit_progress",
     "failure_hint",

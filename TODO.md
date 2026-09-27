@@ -28,11 +28,14 @@ reproduction — confirm before acting.
       reentrant** — a nested acquire would have raised. This also makes the stop
       and the launch atomic with respect to other mutations. Proven by 4 new
       tests, which were checked to fail against the old unlocked code.
-- [ ] **`latest_release` is `lru_cache`d forever** —
-      `llamagui/backends/prebuilt.py`. With `auto_update` enabled the GUI timer
-      re-runs `update` in the same process, but the cached release dict pins
-      "latest" to whatever was fetched at first call for the whole session. Add
-      a TTL, or `cache_clear()` on the `update` and `use --auto-install` paths.
+- [x] ~~**`latest_release` is `lru_cache`d forever**~~ — **done**
+      (`llamagui/backends/prebuilt.py`): replaced the process-lifetime
+      `lru_cache` with a 5-minute TTL cache (`RELEASE_CACHE_TTL`), so
+      `auto_update` on a timer now sees newly published releases. Added
+      `clear_release_cache()`, which `Orchestrator.update()` calls first so an
+      explicit update always observes the newest release rather than whatever
+      was fetched at startup. 5 new tests cover TTL reuse, expiry,
+      `clear_release_cache`, per-repo/token keying, and that `update()` re-fetches.
 - [ ] **Progress + download-control callbacks are process-global** —
       `llamagui/gui/worker_pool.py` `EngineWorker.run` installs
       `set_progress_callback(...)` / `set_download_control(...)` as module
