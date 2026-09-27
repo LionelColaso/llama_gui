@@ -80,8 +80,10 @@ llama_gui/
 │   │   ├── test_downloads_page.py
 │   │   ├── test_first_run.py
 │   │   ├── test_main_window.py
-│   │   ├── test_phase7.py
+│   │   ├── test_model_table.py
+│   │   ├── test_models_page.py
 │   │   ├── test_progress_widget.py
+│   │   ├── test_settings_page.py
 │   │   ├── test_token.py
 │   │   └── test_worker_progress_threading.py
 │   ├── integration/
