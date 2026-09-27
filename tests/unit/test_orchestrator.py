@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import contextlib
 import platform as _platform
+import threading
+from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from llamagui.config import AppConfig
+from llamagui.locking import LockAcquisitionError, mutation_lock
 from llamagui.orchestrator import Orchestrator
+from llamagui.resolver import ResolvedBinary
 
 _SYSTEM = _platform.system().lower()
 _EXE_SUFFIX = ".exe" if _SYSTEM == "windows" else ""
@@ -237,3 +241,159 @@ def test_use_with_auto_install_obtains_backend(tmp_path: Path) -> None:
     assert (tmp_path / "state" / "active.txt").read_text(
         encoding="utf-8"
     ).strip() == backend
+
+
+# ─── launch / restart hold the mutation lock (invariant #15) ────────────────
+
+
+class _LockSpy:
+    """Records whether the mutation lock is held, probed from another thread.
+
+    Two traps make this less obvious than it looks:
+
+    * The Windows implementation is a named mutex, which leaves no lock *file*,
+      so probing for one proves nothing.
+    * A Win32 mutex is **reentrant**: the owning thread can re-acquire it, so a
+      same-thread probe would always succeed even when the lock is held.
+
+    So the probe runs on a separate thread, where a held lock refuses with
+    LockAcquisitionError (exit 4) and an unlocked action lets it through.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.observed: list[bool] = []
+
+    def sample(self) -> None:
+        outcome: list[bool] = []
+
+        def _probe() -> None:
+            try:
+                with mutation_lock(self.root, timeout=0.0):
+                    outcome.append(False)
+            except LockAcquisitionError:
+                outcome.append(True)
+
+        thread = threading.Thread(target=_probe, daemon=True)
+        thread.start()
+        thread.join(timeout=5.0)
+        self.observed.append(outcome[0] if outcome else False)
+
+
+def _launch_patches(
+    orch: Orchestrator, spy: _LockSpy
+) -> list[AbstractContextManager[object]]:
+    """Patch everything ``_launch_locked`` touches, so no real process starts.
+
+    Returns the context managers to enter.
+    """
+    resolved = ResolvedBinary("llama-server", None, "b1", True, None)
+
+    def _spawn(*args: object, **kwargs: object) -> int:
+        spy.sample()
+        return 4242
+
+    def _stop(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"stopped_pids": [], "port_free": True, "still_listening": False}
+
+    return [
+        patch("llamagui.orchestrator.resolve_llama_server", return_value=resolved),
+        patch("llamagui.orchestrator.check_port", return_value=False),
+        patch("llamagui.orchestrator.launch_llama_server", side_effect=_spawn),
+        patch("llamagui.orchestrator.stop_processes", side_effect=_stop),
+        patch.object(orch, "_resolve_model_path", return_value=orch.root / "m.gguf"),
+        patch.object(orch, "_server_args_for", return_value=["llama-server"]),
+    ]
+
+
+def test_launch_holds_the_mutation_lock(tmp_path: Path) -> None:
+    """launch() must hold the lock while it spawns the server.
+
+    Regression: launch used to run unlocked, so a concurrent install could
+    wipe_and_extract the backend directory out from under the binary being
+    spawned (invariant #15).
+    """
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    spy = _LockSpy(tmp_path)
+    with contextlib.ExitStack() as stack:
+        for ctx in _launch_patches(orch, spy):
+            stack.enter_context(ctx)
+        pid = orch.launch()
+
+    assert pid == 4242
+    assert spy.observed == [True], "launch spawned the server without the lock held"
+
+
+def test_stop_holds_the_mutation_lock(tmp_path: Path) -> None:
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    spy = _LockSpy(tmp_path)
+    seen: list[bool] = []
+
+    def _stop(*args: object, **kwargs: object) -> dict[str, object]:
+        spy.sample()
+        return {"stopped_pids": [], "port_free": True, "still_listening": False}
+
+    with patch("llamagui.orchestrator.stop_processes", side_effect=_stop):
+        orch.stop()
+    seen.extend(spy.observed)
+    assert seen == [True], "stop terminated processes without the lock held"
+
+
+def test_restart_takes_the_lock_once(tmp_path: Path) -> None:
+    """restart() must not re-enter the lock, which is not reentrant on POSIX.
+
+    The lock file is created O_EXCL, so a nested acquire from the same thread
+    would raise LockAcquisitionError. restart therefore wraps both its stop and
+    its launch in a single ``with mutation_lock(...)``.
+    """
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    spy = _LockSpy(tmp_path)
+    stop_observed: list[bool] = []
+
+    with contextlib.ExitStack() as stack:
+        for ctx in _launch_patches(orch, spy):
+            stack.enter_context(ctx)
+        real_stop = orch._stop_locked
+
+        def _tracked_stop() -> object:
+            spy.sample()
+            stop_observed.append(spy.observed[-1])
+            return real_stop()
+
+        stack.enter_context(
+            patch.object(orch, "_stop_locked", side_effect=_tracked_stop)
+        )
+        pid = orch.restart()
+
+    assert pid == 4242
+    assert stop_observed == [True], "restart stopped without the lock held"
+    assert spy.observed == [True, True], "restart launched without the lock held"
+
+
+def test_restart_does_not_reenter_the_lock(tmp_path: Path) -> None:
+    """A nested acquire would fail outright; prove restart takes it once.
+
+    The POSIX lock file is created O_EXCL, so re-entering it from the same
+    thread raises LockAcquisitionError. This counts the acquires restart
+    performs: exactly one means the guard is neither skipped nor re-entered.
+    """
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    spy = _LockSpy(tmp_path)
+    acquires: list[int] = []
+    real_lock = mutation_lock
+
+    def _counting(root: Path, timeout: float = 0.0) -> AbstractContextManager[None]:
+        """Wrap the real lock so each acquire is counted, without re-entering it."""
+        acquires.append(1)
+        return real_lock(root, timeout)
+
+    with contextlib.ExitStack() as stack:
+        for ctx in _launch_patches(orch, spy):
+            stack.enter_context(ctx)
+        stack.enter_context(patch("llamagui.orchestrator.mutation_lock", _counting))
+        pid = orch.restart()
+
+    assert pid == 4242
+    assert len(acquires) == 1, (
+        f"restart acquired the lock {len(acquires)} times, expected 1"
+    )

@@ -325,6 +325,23 @@ class Orchestrator:
     # ─── Run ─────────────────────────────────────────────────────────────
 
     def launch(self, verify: bool = False) -> int | None:
+        """Start llama-server, holding the mutation lock (invariant #15).
+
+        Launch mutates state: it can stop a previous instance, writes
+        ``state/pids.json`` and spawns a process. Running it unlocked lets a
+        concurrent ``install`` run ``wipe_and_extract`` underneath the binary
+        that is being spawned.
+        """
+        with mutation_lock(self.root):
+            return self._launch_locked(verify=verify)
+
+    def _launch_locked(self, verify: bool) -> int | None:
+        """Launch while the mutation lock is already held.
+
+        Split out from :meth:`launch` because the POSIX lock file is created
+        ``O_EXCL`` and is therefore *not* reentrant: ``restart`` must take the
+        lock exactly once around both its stop and its launch.
+        """
         resolved = resolve_llama_server(self.cfg, validate=True)
         if not resolved.path or not resolved.valid:
             raise EngineError(
@@ -349,7 +366,7 @@ class Orchestrator:
         # A previously launched server still holding the port would make the new
         # one fail to bind, so stop our own instance first (never others').
         if check_port(self.cfg.host, self.cfg.port):
-            stop_processes(self.root, host=self.cfg.host, port=self.cfg.port)
+            self._stop_locked()
         cmd = self._server_args_for(resolved.path, str(model))
         return launch_llama_server(
             cmd,
@@ -361,12 +378,23 @@ class Orchestrator:
 
     def stop(self) -> StopData:
         with mutation_lock(self.root):
-            result = stop_processes(self.root, host=self.cfg.host, port=self.cfg.port)
-            return StopData(**result)
+            return self._stop_locked()
+
+    def _stop_locked(self) -> StopData:
+        """Stop while the mutation lock is already held."""
+        result = stop_processes(self.root, host=self.cfg.host, port=self.cfg.port)
+        return StopData(**result)
 
     def restart(self, verify: bool = False) -> int | None:
-        self.stop()
-        return self.launch(verify=verify)
+        """Stop then launch, taking the mutation lock exactly once.
+
+        Taking it once (rather than delegating to the individually-locking
+        ``stop`` and ``launch``) keeps the two steps atomic with respect to other
+        mutations and avoids re-entering the non-reentrant POSIX lock file.
+        """
+        with mutation_lock(self.root):
+            self._stop_locked()
+            return self._launch_locked(verify=verify)
 
     def list_assets(self) -> ListAssetsData:
         return ListAssetsData(**list_assets(token=self._github_token()))

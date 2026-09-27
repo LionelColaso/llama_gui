@@ -19,13 +19,15 @@ reproduction — confirm before acting.
       the later `.values()` cannot fail either. A malformed file now degrades to
       "no pids" instead of raising `AttributeError` out of `status` / `stop`.
       Covered by 8 regression tests in `tests/unit/test_lifecycle.py`.
-- [ ] **`launch` / `restart` do not take the mutation lock** —
-      `llamagui/orchestrator.py`. Every other mutation (`install`, `update`,
-      `use`, `stop`, `download_model`, `remove_model`, `discard_download`) wraps
-      itself in `mutation_lock(self.root)`, but `launch()` calls
-      `stop_processes()` + `launch_llama_server()` unlocked. A concurrent
-      `install` runs `wipe_and_extract`, deleting the backend directory out from
-      under a spawning server. Wrap the whole body in the lock.
+- [x] ~~**`launch` / `restart` do not take the mutation lock**~~ — **done**
+      (`llamagui/orchestrator.py`): `launch()` now wraps itself in
+      `mutation_lock`, and `restart()` takes the lock *once* around both its stop
+      and its launch rather than delegating to the individually-locking `stop`
+      and `launch`. The body was split into `_launch_locked` / `_stop_locked`
+      because the POSIX lock file is created `O_EXCL` and is therefore **not
+      reentrant** — a nested acquire would have raised. This also makes the stop
+      and the launch atomic with respect to other mutations. Proven by 4 new
+      tests, which were checked to fail against the old unlocked code.
 - [ ] **`latest_release` is `lru_cache`d forever** —
       `llamagui/backends/prebuilt.py`. With `auto_update` enabled the GUI timer
       re-runs `update` in the same process, but the cached release dict pins
