@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -70,13 +71,43 @@ def test_use_empty_backend(tmp_path: str) -> None:
     assert code != 0
 
 
-def test_use_auto_install_succeeds(tmp_path: str) -> None:
-    code = main(["--root", str(tmp_path), "use", "vulkan", "--auto-install", "--json"])
-    if code != 0:
-        # This is a network-dependent test: llama.cpp's "latest" release can be
-        # mid-publish (GPU assets like win-vulkan-x64.zip still uploading), so
-        # the vulkan asset may be temporarily absent. Skip rather than fail.
-        pytest.skip(
-            f"vulkan asset unavailable in latest llama.cpp release (exit {code})"
-        )
-    assert code == 0
+def test_use_auto_install_obtains_the_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``use --auto-install`` must fetch, extract and activate, offline.
+
+    Regression: this used to hit the real GitHub releases API and pull a
+    ~150 MB vulkan archive, so the unit suite was network-dependent and slow,
+    and it skipped itself whenever llama.cpp happened to be mid-publish. The
+    network is stubbed here; the live download is covered by the ``integration``
+    suite instead.
+    """
+    from llamagui.models import platform_backend_names
+
+    backend = next(iter(platform_backend_names()), "vulkan")
+    assets = [{"name": f"{backend}-asset.zip", "browser_download_url": "https://x/y"}]
+
+    calls: list[str] = []
+
+    def fake_release(repo: str, token: str | None = None) -> dict[str, object]:
+        return {"tag_name": "b1", "assets": assets}
+
+    def fake_obtain(self: object, name: str, force: bool = False) -> object:
+        calls.append(name)
+        target = Path(str(self.root)) / "managed" / name  # type: ignore[attr-defined]
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "llama-server").write_text("", encoding="utf-8")
+        return None
+
+    monkeypatch.setattr("llamagui.backends.prebuilt.latest_release", fake_release)
+    monkeypatch.setattr(
+        "llamagui.orchestrator.Orchestrator._obtain_backend", fake_obtain
+    )
+
+    code = main(["--root", str(tmp_path), "use", backend, "--auto-install", "--json"])
+
+    assert code == 0, f"use --auto-install failed for {backend}"
+    assert calls == [backend], "the backend was not obtained"
+    assert (tmp_path / "state" / "active.txt").read_text(encoding="utf-8").strip() == (
+        backend
+    )

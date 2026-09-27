@@ -67,13 +67,13 @@ reproduction — confirm before acting.
       `%APPDATA%/llamagui` or `~/.llamagui`. 3 new tests assert the sandbox
       holds (config path, default root, and that saving the default config
       writes into `tmp_path`).
-- [ ] **A real network download runs in the unit suite** —
-      `tests/unit/test_cli.py::test_use_auto_install_succeeds` hits the GitHub
-      releases API and pulls a ~150 MB vulkan archive. It is not marked
-      `integration`, so `just test` and `scripts/check.py` both depend on the
-      network and on llama.cpp's publishing state. Move it to
-      `tests/integration/test_managed_prebuilt.py`, or monkeypatch
-      `latest_release` / `cached_download`.
+- [x] ~~**A real network download runs in the unit suite**~~ — **done**: the
+      unit test now stubs `latest_release` and `_obtain_backend` and asserts the
+      backend is obtained and activated, fully offline and deterministic. The
+      live variant moved to `tests/integration/test_managed_prebuilt.py`
+      (`test_cli_use_auto_install_live`, marked `integration` + `GITHUB_TOKEN`),
+      so the real download is still covered where it belongs.
+
 
 ## P1 — Correctness & robustness
 
