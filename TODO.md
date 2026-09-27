@@ -147,12 +147,17 @@ reproduction — confirm before acting.
 
 ## P2 — Test gaps
 
-- [ ] **No tests for `llamagui/serverargs.py`** (2 100+ lines, 248 catalogue
-      rows) — `options_to_cli`, `validate_value`, `validate_options` and
-      `find_arg` are only exercised indirectly. Add
-      `tests/unit/test_serverargs.py` covering catalogue invariants (unique
-      flags, dedicated flags ⊆ `DEDICATED_FLAGS`, sections ⊆ `SECTIONS`),
-      value normalisation per `ArgKind`, and token serialisation order.
+- [x] ~~**No tests for `llamagui/serverargs.py`**~~ — **done**: new
+      `tests/unit/test_serverargs.py` with 47 tests covering catalogue invariants
+      (unique flags, `--`-only spellings, sections, dedicated flags present,
+      alias uniqueness/non-collision, choice values, help text, `negated` only on
+      booleans), `find_arg` (canonical + alias + unknown), `validate_value` per
+      `ArgKind` (bool normalisation, int, float, choice, string, path, blank),
+      `options_to_cli` (bare flag, flag+value, dedicated flags skipped, blanks
+      dropped, negated form, catalogue ordering, unknown dropped) and
+      `validate_options` / `count`. The catalogue itself turned out to be clean,
+      so no data changes were needed.
+
 - [ ] **No orchestrator tests for the server-arg actions** —
       `describe_server_args` / `set_server_arg` / `clear_server_args` have zero
       coverage, including the dedicated-flag path (`--port`, `--ctx-size`,
