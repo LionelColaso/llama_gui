@@ -258,18 +258,18 @@ reproduction — confirm before acting.
       directory that has been removed. `vendor` stays in `ALWAYS_IGNORE`
       defensively (documented in the code) so a vendored tree could never leak
       into the map if reintroduced.
-- [ ] **The server-arg catalogue is behind a current `llama-server`** — found by
-      the new `scripts/check_server_args.py` against a real binary (winget
-      `ggml.llamacpp`); the committed snapshot itself is still in sync. These
-      options exist upstream but have no `ServerArg` row, so the GUI cannot set
-      them: `--kv-unified-per-slot`, `--lazy-mode` / `-lzm`, `--log-jsonl` /
-      `--no-log-jsonl`, `--mmproj-device` / `-mmdev`, `--n-cpu-ffn` / `-ncffn`,
-      `--spec-synth-len`, `--spec-synth-rates`, `--video-fps`,
-      `--video-timestamp-interval`, `--video-ffmpeg-dir`. Add the rows (with
-      section, kind, help and default), refresh
-      `docs/reference/llama-server-help.txt`, then re-run
-      `just check-server-args`. Run it with `--strict` in CI so a nightly that
-      adds a flag fails the build instead of drifting silently.
+- [x] ~~**The server-arg catalogue is behind a current `llama-server`**~~ —
+      **done**: added the 10 missing options as `ServerArg` rows, transcribed
+      from a real binary's `--help` rather than guessed — `--n-cpu-ffn` / `-ncffn`,
+      `--lazy-mode` / `-lzm`, `--log-jsonl` / `--no-log-jsonl`,
+      `--mmproj-device` / `-mmdev`, `--kv-unified-per-slot`, `--spec-synth-len`,
+      `--spec-synth-rates`, `--video-fps`, `--video-timestamp-interval`,
+      `--video-ffmpeg-dir` (with `is_dir=True`). `docs/reference/llama-server-help.txt`
+      was refreshed from the same binary, so
+      `just check-server-args --binary …` now reports **402 flags / 258 options,
+      exact match**. The module docstring now records when the snapshot was
+      taken and how to refresh it.
+
 - [ ] **Snapshot is older than the toolchain** — `serverargs.py` pins the
       snapshot to b10488 / commit 9d77fa172, but a current binary already differs
       (see above). Record the version the snapshot came from in the file header

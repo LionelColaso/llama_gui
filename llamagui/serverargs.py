@@ -7,8 +7,15 @@ this table, the launch code serialises user values to CLI tokens from it, and
 :mod:`scripts.check_server_args` diffs it against a real binary's ``--help`` so
 a new nightly build can never silently outrun the app.
 
-Reference snapshot: ``docs/reference/llama-server-help.txt``
-(``llama-server`` b10488, 0.1.2-dev, commit 9d77fa172).
+Reference snapshot: ``docs/reference/llama-server-help.txt``, captured
+2026-09-28 from the winget ``ggml.llamacpp`` build. Refresh it with
+``llama-server --help`` (dropping the startup log line) whenever the catalogue
+is resynced, then diff the two with::
+
+    just check-server-args --binary <path/to/llama-server>
+
+so a nightly that adds or renames a flag is caught rather than discovered by a
+user with a greyed-out option.
 
 Four flags are *dedicated* — they are owned by long-standing ``AppConfig``
 fields (``host``, ``port``, ``ctx_size``, ``n_gpu_layers``) so the rest of the
@@ -491,6 +498,14 @@ SERVER_ARGS: tuple[ServerArg, ...] = (
         env="LLAMA_ARG_OVERRIDE_TENSOR",
     ),
     ServerArg(
+        "--n-cpu-ffn",
+        "common",
+        ArgKind.INT,
+        "Keep the dense FFN weights of the first N layers in the CPU.",
+        aliases=("-ncffn",),
+        env="LLAMA_ARG_N_CPU_FFN",
+    ),
+    ServerArg(
         "--cpu-moe",
         "common",
         ArgKind.BOOL,
@@ -672,6 +687,25 @@ SERVER_ARGS: tuple[ServerArg, ...] = (
     ),
     ServerArg(
         "--log-disable", "common", ArgKind.BOOL, "Disable logging.", default="false"
+    ),
+    ServerArg(
+        "--log-jsonl",
+        "common",
+        ArgKind.BOOL,
+        "Log as JSONL to stdout (disables colored logging).",
+        negated="--no-log-jsonl",
+        default="false",
+        env="LLAMA_ARG_LOG_JSONL",
+    ),
+    ServerArg(
+        "--lazy-mode",
+        "common",
+        ArgKind.CHOICE,
+        "On-demand reading of certain tensors, e.g. per-layer embeddings.",
+        aliases=("-lzm",),
+        choices=_choice("on", "auto", "off"),
+        default="auto",
+        env="LLAMA_ARG_LAZY_MODE",
     ),
     ServerArg(
         "--log-file", "common", ArgKind.PATH, "Log to file.", env="LLAMA_ARG_LOG_FILE"
@@ -1205,6 +1239,20 @@ SERVER_ARGS: tuple[ServerArg, ...] = (
         default="64",
     ),
     ServerArg(
+        "--spec-synth-len",
+        "speculative",
+        ArgKind.INT,
+        "Target mean synthetic acceptance length, including the target token.",
+        env="LLAMA_ARG_SPEC_SYNTH_LEN",
+    ),
+    ServerArg(
+        "--spec-synth-rates",
+        "speculative",
+        ArgKind.STRING,
+        "Unconditional per-position synthetic acceptance probabilities.",
+        env="LLAMA_ARG_SPEC_SYNTH_RATES",
+    ),
+    ServerArg(
         "--spec-ngram-mod-n-match",
         "speculative",
         ArgKind.INT,
@@ -1466,6 +1514,45 @@ SERVER_ARGS: tuple[ServerArg, ...] = (
         "Enable GPU offloading for the multimodal projector.",
         negated="--no-mmproj-offload",
         env="LLAMA_ARG_MMPROJ_OFFLOAD",
+    ),
+    ServerArg(
+        "--mmproj-device",
+        "server",
+        ArgKind.STRING,
+        "Device to use for the multimodal projector (none = no offload).",
+        aliases=("-mmdev",),
+        env="MTMD_BACKEND_DEVICE",
+    ),
+    ServerArg(
+        "--kv-unified-per-slot",
+        "server",
+        ArgKind.INT,
+        "Context limit per parallel slot; sizes the shared KV pool when set.",
+        env="LLAMA_ARG_KV_UNIFIED_PER_SLOT",
+    ),
+    ServerArg(
+        "--video-fps",
+        "server",
+        ArgKind.FLOAT,
+        "Target video frame rate.",
+        default="4.0",
+        env="LLAMA_ARG_VIDEO_FPS",
+    ),
+    ServerArg(
+        "--video-timestamp-interval",
+        "server",
+        ArgKind.INT,
+        "Interval in milliseconds between text timestamps.",
+        default="5000",
+        env="LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL",
+    ),
+    ServerArg(
+        "--video-ffmpeg-dir",
+        "server",
+        ArgKind.PATH,
+        "Directory containing ffmpeg and ffprobe.",
+        is_dir=True,
+        env="LLAMA_ARG_VIDEO_FFMPEG_DIR",
     ),
     ServerArg(
         "--image-min-tokens",
