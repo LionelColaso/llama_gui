@@ -119,12 +119,14 @@ reproduction — confirm before acting.
       — that distinction matters (see below). 3 new tests, including a guard that
       the GUI's method names are never mistaken for typos.
 
-- [ ] **First-run resume prompt blocks in a page constructor** —
-      `llamagui/gui/pages/models.py` `ModelsPage.__init__` → `_offer_resume()`
-      shows a modal `QMessageBox` per pending `.part` while the widget tree is
-      still being built, and it uses the older `resumable_tasks` helper instead
-      of the shared `pending_downloads`. Move the prompt to `showEvent` or an
-      explicit "Resume pending downloads?" button, and consolidate on one helper.
+- [x] ~~**First-run resume prompt blocks in a page constructor**~~ — **done**:
+      `ModelsPage` now defers the modal resume prompt from `__init__` to
+      `showEvent`, guarded by a `_resume_prompted` flag so it happens at most
+      once. Showing a `QMessageBox` while the widget tree — and `MainWindow`
+      itself — is still being constructed is fragile, and it made startup depend
+      on a yes/no answer. 2 new tests: the constructor must not prompt, and the
+      prompt must fire exactly once on first show.
+
 - [ ] **Download meta sidecar is written on the hot path** — `llamagui/download.py`
       rewrites `<name>.part.meta` inside the chunk loop *(unverified: confirm the
       write cadence)*. For multi-GB downloads that is a lot of small synchronous

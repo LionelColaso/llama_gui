@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -81,7 +82,24 @@ class ModelsPage(DownloadActionMixin, QWidget):
 
         self._load()
         self._show_server_path()
-        self._offer_resume()
+        self._resume_prompted = False
+
+    # ─── Resume prompt ───────────────────────────────────────────────────
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Offer to resume an interrupted download once the page is shown.
+
+        This used to run from ``__init__``, which showed a modal message box
+        while the whole widget tree was still being constructed -- including
+        from MainWindow's own constructor. A modal dialog that early is
+        fragile to interact with (the parent is not fully built yet) and made
+        startup depend on a yes/no answer, so it is deferred to first show and
+        happens at most once.
+        """
+        super().showEvent(event)
+        if not self._resume_prompted:
+            self._resume_prompted = True
+            self._offer_resume()
 
     def _offer_resume(self) -> None:
         """Prompt to resume any model download left unfinished by a prior run."""

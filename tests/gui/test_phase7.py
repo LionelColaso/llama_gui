@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from PySide6.QtWidgets import QComboBox, QLineEdit
+import pytest
+from PySide6.QtWidgets import QComboBox, QLineEdit, QMessageBox
 from pytestqt.qtbot import QtBot
 
 from llamagui.gui.pages.models import ModelsPage
@@ -16,6 +17,16 @@ def _item_text(table: ModelTable, row: int, col: int) -> str:
     item = table.item(row, col)
     assert item is not None
     return item.text()
+
+
+def _stub_resume_question(monkeypatch: pytest.MonkeyPatch, asked: list[bool]) -> None:
+    """Record any modal resume prompt, answering "No" so nothing starts."""
+
+    def _question(*args: object, **kwargs: object) -> QMessageBox.StandardButton:
+        asked.append(True)
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("llamagui.gui.pages.models.QMessageBox.question", _question)
 
 
 def _set_row_value(page: ServerArgsPage, flag: str, value: str) -> None:
@@ -96,6 +107,38 @@ class TestModelsPage:
         )
         assert page._table.rowCount() == 1
         assert _item_text(page._table, 0, 0) == "a.gguf"
+
+    def test_resume_prompt_is_not_shown_during_construction(
+        self, qtbot: QtBot, fake_orch: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: the modal prompt used to fire from __init__.
+
+        A QMessageBox shown while the widget tree (and MainWindow itself) is
+        still being built is fragile and made startup depend on a yes/no
+        answer. It must be deferred to the first show.
+        """
+        asked: list[bool] = []
+        _stub_resume_question(monkeypatch, asked)
+
+        ModelsPage(fake_orch)  # must not prompt
+
+        assert asked == [], "the resume prompt must not run in the constructor"
+
+    def test_resume_prompt_runs_once_on_first_show(
+        self, qtbot: QtBot, fake_orch: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        offered: list[bool] = []
+
+        page = ModelsPage(fake_orch)
+        qtbot.addWidget(page)
+        monkeypatch.setattr(page, "_offer_resume", lambda: offered.append(True))
+
+        page.show()
+        qtbot.wait(50)
+        page.show()  # already shown once; must not prompt again
+        qtbot.wait(50)
+
+        assert offered == [True], "the prompt should happen on first show, once"
 
 
 class TestSettingsPage:
