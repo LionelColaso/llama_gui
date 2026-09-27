@@ -203,12 +203,16 @@ reproduction — confirm before acting.
       its message, a worker error is shown and Retry is re-enabled, and choosing
       the OS install verifies it actually resolved).
 
-- [ ] **`scripts/` is untested and `stats.py` walks `.venv`** —
-      `scripts/mapping.py`, `stats.py` and `clean.py` have no coverage;
-      `scripts/stats.py::_iter_source_files` has a dead
-      `if path.is_dir(): continue` branch that makes `IGNORE_DIRS`
-      ineffective, so it traverses the whole virtualenv. Fix the pruning and add
-      tests.
+- [x] ~~**`scripts/` is untested and `stats.py` walks `.venv`**~~ — **done**:
+      new `tests/unit/test_scripts.py` (11 tests) loading each script by path.
+      **Fixed the real bug**: `_iter_source_files` used `rglob("*")` with an
+      `is_dir()` branch that could not prevent descent, so every run walked the
+      whole virtualenv; it now uses `os.walk` with in-place pruning (verified:
+      fails on the old code, and `stats.py` now runs in ~0.2 s). Tests also
+      cover `mapping.py` (generates a tree, respects `.gitignore` and the
+      hardcoded extras) and `clean.py` (`--dry-run` deletes nothing, a real run
+      removes caches and coverage files).
+
 - [ ] **`tests/gui/test_phase7.py` is a stale grab-bag** — the name no longer
       describes its contents (model table, size formatting, models page,
       settings page) and it keeps a class name (`TestConfigYaml`) left over from

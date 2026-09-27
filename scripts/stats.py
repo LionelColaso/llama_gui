@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -22,13 +23,20 @@ IGNORE_DIRS = {
 
 
 def _iter_source_files(root: Path) -> Generator[Path, None, None]:
-    for path in root.rglob("*"):
-        if path.is_dir():
-            if path.name in IGNORE_DIRS:
-                continue
-            continue
-        if path.suffix in SOURCE_EXTS:
-            yield path
+    """Yield the project's own ``.py``/``.pyi`` files, skipping vendor trees.
+
+    This walks with os.walk and prunes in place. An earlier version used
+    ``rglob('*')`` and tried to skip directories with an ``is_dir()`` branch,
+    which does nothing: rglob has already descended into the virtualenv by the
+    time the files are seen. So every run walked the whole of ``.venv`` (tens of
+    thousands of files) just to count a few dozen source files.
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in place so the excluded trees are never descended into.
+        dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
+        for name in filenames:
+            if Path(name).suffix in SOURCE_EXTS:
+                yield Path(dirpath) / name
 
 
 def main() -> int:

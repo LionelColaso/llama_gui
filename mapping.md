@@ -68,6 +68,7 @@ llama_gui/
 ├── scripts/
 │   ├── build.py
 │   ├── check.py
+│   ├── check_server_args.py
 │   ├── clean.py
 │   ├── mapping.py
 │   └── stats.py
@@ -77,9 +78,11 @@ llama_gui/
 │   │   ├── conftest.py
 │   │   ├── test_dashboard.py
 │   │   ├── test_downloads_page.py
+│   │   ├── test_first_run.py
 │   │   ├── test_main_window.py
 │   │   ├── test_phase7.py
 │   │   ├── test_progress_widget.py
+│   │   ├── test_token.py
 │   │   └── test_worker_progress_threading.py
 │   ├── integration/
 │   │   ├── __init__.py
@@ -87,6 +90,7 @@ llama_gui/
 │   ├── unit/
 │   │   ├── __init__.py
 │   │   ├── test_applog.py
+│   │   ├── test_check_server_args.py
 │   │   ├── test_cli.py
 │   │   ├── test_config_durable.py
 │   │   ├── test_contract.py
@@ -94,12 +98,15 @@ llama_gui/
 │   │   ├── test_lifecycle.py
 │   │   ├── test_lifecycle_posix.py
 │   │   ├── test_locking.py
+│   │   ├── test_model_store.py
 │   │   ├── test_models_catalogue.py
 │   │   ├── test_orchestrator.py
 │   │   ├── test_paths.py
 │   │   ├── test_prebuilt.py
 │   │   ├── test_progress.py
 │   │   ├── test_resolver.py
+│   │   ├── test_scripts.py
+│   │   ├── test_serverargs.py
 │   │   └── test_state_reader.py
 │   ├── __init__.py
 │   └── conftest.py
@@ -114,4 +121,5 @@ llama_gui/
 ├── mapping.md
 ├── pyproject.toml
 ├── README.md
+├── TODO.md
 └── uv.lock
