@@ -13,6 +13,7 @@ import shutil
 import stat
 import sys
 import tarfile
+import threading
 import time
 import zipfile
 from collections.abc import Callable, Iterable
@@ -66,12 +67,23 @@ def _cudart_pattern(entry: Backend, mode: str) -> str | None:
 # ─── GUI progress callback ────────────────────────────────────────────────
 
 ProgressCallback = Callable[[int, int, str, float | None], None]
-_progress_callback: ProgressCallback | None = None
+
+#: Thread-local rather than process-global. The GUI runs each mutation on its
+#: own QThreadPool thread, and two can overlap (the auto-update timer plus a
+#: model download). With a single global, the second worker's install would
+#: overwrite the first's callback, and whichever finished first would clear it
+#: out from under the other — so progress for one download could stop updating,
+#: or two bars could be driven by the wrong worker. Scoping to the thread keeps
+#: each worker's callback to itself.
+_progress_state = threading.local()
 
 
 def set_progress_callback(cb: ProgressCallback | None) -> None:
-    global _progress_callback
-    _progress_callback = cb
+    _progress_state.callback = cb
+
+
+def get_progress_callback() -> ProgressCallback | None:
+    return getattr(_progress_state, "callback", None)
 
 
 def emit_progress(
@@ -81,7 +93,8 @@ def emit_progress(
     phase: str,
     overall: float | None = None,
 ) -> None:
-    if _progress_callback is None:
+    callback = get_progress_callback()
+    if callback is None:
         # CLI mode: the PROGRESS line protocol on stderr is the progress
         # channel (parsed via models.parse_progress_line). The optional
         # ``overall`` fraction is GUI-only and is intentionally omitted here
@@ -96,7 +109,7 @@ def emit_progress(
         # (when known) is the fraction of the *whole* operation done so far,
         # so multi-phase work (download → extract → cudart) renders as one
         # continuous bar instead of several 0→100% segments.
-        _progress_callback(bytes_done, bytes_total, phase, overall)
+        callback(bytes_done, bytes_total, phase, overall)
 
 
 class _ExtractProgress:
@@ -440,7 +453,7 @@ def wipe_and_extract(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     prog: _ExtractProgress | None = None
-    if _progress_callback is not None:
+    if get_progress_callback() is not None:
         prog = _ExtractProgress(component, overall_range)
 
     if _is_tar_gz(archive_path):
@@ -474,7 +487,7 @@ def _extract_cudart(
         return bool(member.parts) and member.suffix.lower() in lib_suffixes
 
     prog: _ExtractProgress | None = None
-    if _progress_callback is not None:
+    if get_progress_callback() is not None:
         prog = _ExtractProgress(component, overall_range)
 
     if _is_tar_gz(archive_path):
@@ -689,6 +702,7 @@ __all__ = [
     "download_file",
     "emit_progress",
     "failure_hint",
+    "get_progress_callback",
     "install_backend",
     "installed_backends",
     "latest_release",

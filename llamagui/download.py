@@ -102,18 +102,22 @@ class DownloadControl:
                 self._cond.wait(timeout=poll)
 
 
-# ─── Active control (mirrors the progress-callback global) ───────────────────
+# ─── Active control (mirrors the progress-callback thread-local) ───────────
 
-_current_control: DownloadControl | None = None
+#: Thread-local so overlapping workers each keep their own Pause/Cancel handle.
+#: The GUI runs every mutation on its own QThreadPool thread, and two can
+#: overlap (auto-update plus a model download); with a single global, the second
+#: worker would take over the first's control and the first to finish would clear
+#: it, so Pause/Cancel would silently stop working mid-download.
+_control_state = threading.local()
 
 
 def set_download_control(control: DownloadControl | None) -> None:
-    global _current_control
-    _current_control = control
+    _control_state.control = control
 
 
 def get_download_control() -> DownloadControl | None:
-    return _current_control
+    return getattr(_control_state, "control", None)
 
 
 # ─── Meta sidecar (survives restarts so a download can be offered to resume) ──

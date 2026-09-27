@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,14 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from llamagui.download import discard_pending, pending_downloads, stream_download
+from llamagui.download import (
+    DownloadControl,
+    discard_pending,
+    get_download_control,
+    pending_downloads,
+    set_download_control,
+    stream_download,
+)
 
 
 def _get(url: str) -> httpx.Request:
@@ -168,3 +176,50 @@ def test_discard_pending_removes_part_and_meta(tmp_path: Path) -> None:
     assert not meta.exists()
     # A second discard is a no-op (nothing left to remove).
     assert discard_pending(dest) is False
+
+
+# ─── Active control is thread-scoped ───────────────────────────────────────
+
+
+def test_download_control_is_thread_local() -> None:
+    """Regression: the control was a process global, so two workers could
+    clobber each other and Pause/Cancel would stop working mid-download."""
+    a = DownloadControl()
+    b = DownloadControl()
+    # Sized for the two workers only; the main thread must not join it.
+    ready = threading.Barrier(2, timeout=10)
+    seen: dict[str, DownloadControl | None] = {}
+
+    def _worker(name: str, control: DownloadControl) -> None:
+        set_download_control(control)
+        ready.wait()  # both installed before either reads
+        seen[name] = get_download_control()
+        set_download_control(None)
+
+    threads = [
+        threading.Thread(target=_worker, args=("a", a)),
+        threading.Thread(target=_worker, args=("b", b)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert seen == {"a": a, "b": b}, "each worker must keep its own control"
+    assert get_download_control() is None
+
+
+def test_download_control_does_not_leak_across_threads() -> None:
+    set_download_control(DownloadControl())
+    try:
+        result: list[bool] = []
+
+        def _probe() -> None:
+            result.append(get_download_control() is None)
+
+        t = threading.Thread(target=_probe)
+        t.start()
+        t.join(timeout=10)
+        assert result == [True], "a thread-local leaked into a new thread"
+    finally:
+        set_download_control(None)

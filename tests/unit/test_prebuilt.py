@@ -5,6 +5,7 @@ import os
 import stat
 import sys
 import tarfile
+import threading
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -20,10 +21,13 @@ from llamagui.backends.prebuilt import (
     cached_download,
     clear_release_cache,
     download_file,
+    emit_progress,
+    get_progress_callback,
     install_backend,
     installed_backends,
     latest_release,
     match_asset,
+    set_progress_callback,
     wipe_and_extract,
 )
 from llamagui.models import get_backend
@@ -521,6 +525,7 @@ def test_release_is_cached_within_the_ttl() -> None:
 def test_release_refetches_after_the_ttl() -> None:
     """Regression: the cache used to live for the whole process, so a
     long-running GUI could never observe a newly published release."""
+
     calls: list[str] = []
 
     def _get(url: str, **kwargs: object) -> _FakeResponse:
@@ -596,3 +601,57 @@ def test_update_drops_the_cached_release(tmp_path: Path) -> None:
         with pytest.raises((EngineError, PrebuiltError)):
             Orchestrator(AppConfig(root=str(tmp_path))).update()
         assert len(calls) > before, "update() reused the stale cached release"
+
+
+# ─── Progress callback is thread-scoped ────────────────────────────────────
+
+
+def test_progress_callback_is_thread_local() -> None:
+    """Regression: the callback was a process global, so two workers could
+    clobber each other — the auto-update timer plus a model download."""
+    seen: dict[str, str] = {}
+    # Sized for the two workers only: the main thread must not join, or it would
+    # consume a slot and deadlock the pair. The barrier alone is what guarantees
+    # both callbacks are installed before either emits.
+    ready = threading.Barrier(2, timeout=10)
+
+    def _worker(name: str) -> None:
+        def cb(done: int, total: int, phase: str, overall: float | None) -> None:
+            seen[name] = name
+
+        set_progress_callback(cb)
+        ready.wait()  # both installed before either emits
+        emit_progress(name, 1, 2, "download")
+        set_progress_callback(None)
+
+    threads = [threading.Thread(target=_worker, args=(n,)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    # The barrier is sized for the two workers only; the main thread must not
+    # join it or it would consume a slot and deadlock the pair.
+    for t in threads:
+        t.join(timeout=10)
+
+    assert seen == {"a": "a", "b": "b"}, "each worker must drive its own callback"
+    assert get_progress_callback() is None
+
+
+def test_progress_callback_defaults_to_none_on_a_fresh_thread() -> None:
+    """A new worker thread must not inherit another worker's callback."""
+
+    def _noop(done: int, total: int, phase: str, overall: float | None) -> None:
+        return None
+
+    set_progress_callback(_noop)
+    try:
+        result: list[bool] = []
+
+        def _probe() -> None:
+            result.append(get_progress_callback() is None)
+
+        t = threading.Thread(target=_probe)
+        t.start()
+        t.join(timeout=10)
+        assert result == [True], "a thread-local leaked into a new thread"
+    finally:
+        set_progress_callback(None)

@@ -36,14 +36,15 @@ reproduction — confirm before acting.
       explicit update always observes the newest release rather than whatever
       was fetched at startup. 5 new tests cover TTL reuse, expiry,
       `clear_release_cache`, per-repo/token keying, and that `update()` re-fetches.
-- [ ] **Progress + download-control callbacks are process-global** —
-      `llamagui/gui/worker_pool.py` `EngineWorker.run` installs
-      `set_progress_callback(...)` / `set_download_control(...)` as module
-      globals and clears them in `finally`. Two overlapping workers (e.g. the
-      auto-update timer plus a model download) clobber each other: the first
-      worker's `finally` clears the second's control, so Pause/Cancel silently
-      stop working. Either serialise mutations, or thread the callback / control
-      through the orchestrator call instead of a global.
+- [x] ~~**Progress + download-control callbacks are process-global**~~ — **done**
+      (`llamagui/backends/prebuilt.py`, `llamagui/download.py`): both are now
+      **thread-local** rather than process-global. The GUI runs each mutation on
+      its own `QThreadPool` thread, so scoping to the thread keeps each worker's
+      callback and its Pause/Cancel handle to itself. Overlapping workers (the
+      auto-update timer plus a model download) can no longer clobber each other.
+      Added `get_progress_callback()` and fixed the two extraction sites that
+      still read the old global. 4 new tests cover isolation and non-leakage
+      across threads.
 - [ ] **`--json` is read from `sys.argv`, not the parsed argv, on argparse
       errors** — `llamagui/cli.py` `_Parser.error` uses
       `"--json" in sys.argv` while `main()` uses its `argv` argument. Invoking
