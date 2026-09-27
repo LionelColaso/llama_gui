@@ -59,13 +59,14 @@ reproduction — confirm before acting.
       per-file `xattr -d` is kept as a fallback for symlinks and filesystems
       where `-r` does not descend. 3 new tests assert a single recursive call,
       the fallback, and that it stays a no-op off macOS.
-- [ ] **Unit tests touch the real user config and root** —
-      `tests/unit/test_cli.py::test_describe_json` / `test_status_json` /
-      `test_resolve_json` call `main([...])` with no `--root` and no
-      `LLAMAGUI_CONFIG_DIR`, so they read (and can write) the developer's real
-      `%APPDATA%/llamagui/config.json` and `~/.llamagui`. Add an autouse fixture
-      in `tests/conftest.py` that points `LLAMAGUI_CONFIG_DIR` at `tmp_path` and
-      forces `--root`.
+- [x] ~~**Unit tests touch the real user config and root**~~ — **done**
+      (`tests/conftest.py`): an autouse `_isolated_config` fixture now points
+      `LLAMAGUI_CONFIG_DIR`, the platform data dir (`LOCALAPPDATA` /
+      `XDG_DATA_HOME` / `XDG_CONFIG_HOME`) and `LEGACY_ROOT` at `tmp_path` for
+      every test, so nothing reaches the developer's real
+      `%APPDATA%/llamagui` or `~/.llamagui`. 3 new tests assert the sandbox
+      holds (config path, default root, and that saving the default config
+      writes into `tmp_path`).
 - [ ] **A real network download runs in the unit suite** —
       `tests/unit/test_cli.py::test_use_auto_install_succeeds` hits the GitHub
       releases API and pulls a ~150 MB vulkan archive. It is not marked

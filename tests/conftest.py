@@ -14,6 +14,31 @@ from llamagui.applog import configure_logging
 
 
 @pytest.fixture(autouse=True)
+def _isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test off the developer's real config and managed root.
+
+    Without this, any test that reaches ``AppConfig.load()`` (or the CLI,
+    which does so implicitly) reads and can write the user's actual
+    ``%APPDATA%/llamagui/config.json`` and their real managed root. A test run
+    could then depend on, or corrupt, real state.
+
+    ``LLAMAGUI_CONFIG_DIR`` is the documented override for the settings file.
+    The data dir is redirected by setting the platform's own base-directory
+    variables (``LOCALAPPDATA`` on Windows, ``XDG_DATA_HOME`` elsewhere), and
+    ``LEGACY_ROOT`` is repointed because ``default_root()`` prefers an existing
+    ``~/.llamagui`` over the platform data dir. A stray ``LLAMAGUI_CONFIG_DIR``
+    inherited from the developer's own shell is cleared first so this fixture
+    is what decides, not the environment.
+    """
+    monkeypatch.delenv("LLAMAGUI_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setattr("llamagui.paths.LEGACY_ROOT", tmp_path / "no-legacy-root")
+
+
+@pytest.fixture(autouse=True)
 def _app_log(tmp_path: Path) -> Generator[None, None, None]:
     """Route loguru to a per-test temp file.
 

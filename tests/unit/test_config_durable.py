@@ -81,6 +81,37 @@ def test_unknown_keys_are_preserved(tmp_path: Path) -> None:
     assert reparsed["experimental_flag"] == 7
 
 
+# ─── test isolation (autouse fixture in tests/conftest.py) ─────────────────
+
+
+def test_default_config_path_is_inside_tmp_path(tmp_path: Path) -> None:
+    """Regression: tests that called AppConfig.load() with no path read the
+    developer's real %APPDATA%/llamagui/config.json, and the CLI writes it."""
+    resolved = config_file()
+    assert str(resolved).startswith(str(tmp_path)), (
+        f"config_file() escaped the test sandbox: {resolved}"
+    )
+
+
+def test_default_root_is_inside_tmp_path(tmp_path: Path) -> None:
+    """The managed root must not be the developer's real ~/.llamagui either."""
+    from llamagui.paths import default_root
+
+    root = default_root()
+    assert str(root).startswith(str(tmp_path)), (
+        f"default_root() escaped the test sandbox: {root}"
+    )
+
+
+def test_saving_the_default_config_writes_into_tmp_path(tmp_path: Path) -> None:
+    """A test that saves the default config must not touch the real file."""
+    cfg = AppConfig(root=str(tmp_path / "root"))
+    cfg.save()
+    written = config_file()
+    assert written.is_file()
+    assert str(written).startswith(str(tmp_path))
+
+
 def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     loaded = AppConfig.load(tmp_path / "absent" / "config.json")
     assert loaded.port == 8080
