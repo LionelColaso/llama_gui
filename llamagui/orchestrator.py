@@ -406,13 +406,23 @@ class Orchestrator:
             verify=verify,
         )
 
-    def stop(self) -> StopData:
-        with mutation_lock(self.root):
-            return self._stop_locked()
+    def stop(self, grace: float | None = None) -> StopData:
+        """Stop the server. ``grace`` caps how long each process may take to exit.
 
-    def _stop_locked(self) -> StopData:
+        The default is the engine's normal grace period. GUI shutdown passes a
+        short one so closing the window cannot stall the event loop.
+        """
+        with mutation_lock(self.root):
+            return self._stop_locked(grace=grace)
+
+    def _stop_locked(self, grace: float | None = None) -> StopData:
         """Stop while the mutation lock is already held."""
-        result = stop_processes(self.root, host=self.cfg.host, port=self.cfg.port)
+        kwargs: dict[str, Any] = {}
+        if grace is not None:
+            kwargs["grace"] = grace
+        result = stop_processes(
+            self.root, host=self.cfg.host, port=self.cfg.port, **kwargs
+        )
         return StopData(**result)
 
     def restart(self, verify: bool = False) -> int | None:

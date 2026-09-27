@@ -25,6 +25,11 @@ from .pages.server_args import ServerArgsPage
 from .pages.settings import SettingsPage
 from .worker_pool import EngineWorker, WorkerPool
 
+#: Grace period used when stopping the server as the window closes. Short
+#: because closeEvent runs on the GUI thread: a stubborn process is force-killed
+#: once this elapses, so a normal shutdown never stalls the event loop.
+SHUTDOWN_GRACE_SECONDS = 0.5
+
 
 class MainWindow(QWidget):
     def __init__(self, cfg: AppConfig | None = None) -> None:
@@ -219,8 +224,13 @@ class MainWindow(QWidget):
         except Exception:  # noqa: BLE001, S110
             pass
         # Stop any running server so we don't leave an orphaned server/port.
+        # A short grace keeps shutdown from stalling: the default is 5s per
+        # process, and _stop_pid escalates to a hard kill once it elapses, so a
+        # stubborn server is terminated quickly rather than freezing the window
+        # as it closes.
         try:
-            self._orch.stop()
+            self._orch.stop(grace=SHUTDOWN_GRACE_SECONDS)
         except Exception:  # noqa: BLE001, S110 - never block shutdown on a stop error
             pass
+
         super().closeEvent(event)

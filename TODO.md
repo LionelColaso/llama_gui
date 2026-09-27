@@ -103,11 +103,14 @@ reproduction — confirm before acting.
       being added, removed, or completed. 6 new tests in
       `tests/unit/test_model_store.py`.
 
-- [ ] **Blocking `stop()` on the GUI thread during shutdown** —
-      `llamagui/gui/main_window.py` `closeEvent` calls `self._orch.stop()`
-      synchronously; the POSIX path can sleep up to the 5 s
-      `_TERM_GRACE_SECONDS` before escalating, freezing the window as it closes.
-      Run it on a worker, or use a short grace period on the close path only.
+- [x] ~~**Blocking `stop()` on the GUI thread during shutdown**~~ — **done**:
+      `stop_processes` / `Orchestrator.stop` now take a `grace` argument, and
+      `MainWindow.closeEvent` passes `SHUTDOWN_GRACE_SECONDS` (0.5 s) instead of
+      the engine default of 5 s, so a stubborn server is force-killed promptly
+      rather than freezing the window mid-close. The default is unchanged for
+      CLI use. 3 new tests, including a real SIGTERM-ignoring child that proves
+      the short grace is actually honoured.
+
 - [ ] **`EngineWorker` action name is not validated** —
       `llamagui/gui/worker_pool.py` does `getattr(self.orch, self._action)`, so a
       typo surfaces as a runtime `AttributeError` inside a worker instead of a

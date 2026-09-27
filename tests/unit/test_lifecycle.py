@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from contextlib import AbstractContextManager
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from llamagui.lifecycle import (
+    _TERM_GRACE_SECONDS,
     _pid_exists,
     _read_pids,
     _write_pids,
@@ -213,3 +216,76 @@ def test_pidfile_cleared_after_stop(fake_root: Path) -> None:
     stop_processes(fake_root)
     pids = _read_pids(fake_root)
     assert pids["llama_server"] is None
+
+
+# ─── stop grace period bounds how long a shutdown can block ────────────────
+
+
+def test_stop_with_short_grace_is_fast(fake_root: Path) -> None:
+    """A GUI close must not wait out the full 5s grace on the event loop.
+
+    The child ignores SIGTERM, so _stop_pid must escalate to a hard kill as
+    soon as the (short) grace elapses rather than sleeping the default.
+    """
+    import time
+
+    from llamagui.lifecycle import _TERM_GRACE_SECONDS
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(30)",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        _write_pids(fake_root, {"llama_server": proc.pid, "servers": {}})
+        started = time.monotonic()
+        result = stop_processes(fake_root, grace=0.2)
+        elapsed = time.monotonic() - started
+
+        assert proc.pid in result["stopped_pids"]
+        assert elapsed < _TERM_GRACE_SECONDS, (
+            f"stop took {elapsed:.2f}s, so the grace was not honoured"
+        )
+        assert elapsed < 3.0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+class _GraceRecorder:
+    """Stands in for ``_stop_pid`` and records the grace it was handed."""
+
+    def __init__(self) -> None:
+        self.graces: list[float] = []
+
+    def __call__(self, pid: int, grace: float = _TERM_GRACE_SECONDS) -> bool:
+        self.graces.append(grace)
+        return False
+
+
+def _stop_grace_recorder() -> AbstractContextManager[_GraceRecorder]:
+    """Patch ``_stop_pid`` so the grace it receives can be inspected."""
+    from llamagui import lifecycle
+
+    recorder = _GraceRecorder()
+    return patch.object(lifecycle, "_stop_pid", recorder)
+
+
+def test_stop_processes_passes_the_grace_through(fake_root: Path) -> None:
+    """A caller-supplied grace must reach every _stop_pid call."""
+    _write_pids(fake_root, {"llama_server": 4242, "servers": {}})
+    with _stop_grace_recorder() as recorder:
+        stop_processes(fake_root, grace=0.25)
+    assert recorder.graces == [0.25]
+
+
+def test_stop_processes_keeps_the_default_grace(fake_root: Path) -> None:
+    """The engine default must stay at the documented 5s for CLI use."""
+    _write_pids(fake_root, {"llama_server": 4242, "servers": {}})
+    with _stop_grace_recorder() as recorder:
+        stop_processes(fake_root)
+    assert recorder.graces == [_TERM_GRACE_SECONDS]

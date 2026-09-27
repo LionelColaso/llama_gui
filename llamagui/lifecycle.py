@@ -338,17 +338,22 @@ def _reap(pid: int) -> None:
         getattr(os, "waitpid")(pid, getattr(os, "WNOHANG"))  # noqa: B009
 
 
-def _stop_pid(pid: int) -> bool:
-    """Ask a process to exit, escalating to a hard kill after the grace period."""
+def _stop_pid(pid: int, grace: float = _TERM_GRACE_SECONDS) -> bool:
+    """Ask a process to exit, escalating to a hard kill after ``grace`` seconds.
+
+    The caller can shorten (or remove) the grace period. GUI shutdown uses a
+    short one, because it must not hold the event loop while waiting.
+    """
     if not _pid_exists(pid):
         return False
     _terminate_pid(pid, force=False)
-    deadline = time.monotonic() + _TERM_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        _reap(pid)
-        if not _pid_exists(pid):
-            return True
-        time.sleep(0.1)
+    if grace > 0:
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            _reap(pid)
+            if not _pid_exists(pid):
+                return True
+            time.sleep(0.1)
     _terminate_pid(pid, force=True)
     _reap(pid)
     return not _pid_exists(pid)
@@ -358,12 +363,18 @@ def stop_processes(
     root: Path,
     host: str = "127.0.0.1",
     port: int | None = None,
+    grace: float = _TERM_GRACE_SECONDS,
 ) -> dict[str, Any]:
     """Stop exactly the processes this app started (invariant #8).
 
     Processes are never matched by name or by scanning the process list, so a
     llama-server started by the user's own script is left untouched.
+
+    ``grace`` is how long a process is given to exit on its own before being
+    force-killed. GUI shutdown passes a short value so closing the window
+    cannot block the event loop for the full period.
     """
+
     pids = _read_pids(root)
     stopped: list[int] = []
 
@@ -378,7 +389,7 @@ def stop_processes(
     targets.extend(pid for pid in servers.values() if isinstance(pid, int))
 
     for pid in targets:
-        if _stop_pid(pid):
+        if _stop_pid(pid, grace):
             stopped.append(pid)
 
     # Rewrite the pidfile to clear any pid we just stopped or that was already
