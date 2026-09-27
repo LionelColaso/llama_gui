@@ -38,8 +38,10 @@ from .lifecycle import (
 from .locking import mutation_lock
 from .model_store import (
     ModelDownloadError,
+    clear_model_cache,
     download_model,
     list_models,
+    list_models_cached,
     remove_model,
 )
 from .models import (
@@ -493,8 +495,15 @@ class Orchestrator:
         )
 
     def list_models(self) -> ModelsData:
+        """The model library, using the cached listing (see list_models_cached).
+
+        The dashboard polls ``status()`` every few seconds and it calls this,
+        so re-listing a large .gguf library on each poll hammered the disk.
+        The cache is invalidated by fingerprint, so an added, removed or
+        completed model still shows up immediately.
+        """
         models_dir = self._models_dir()
-        models = list_models(models_dir)
+        models = list_models_cached(models_dir)
         active: str | None = self.cfg.active_model
         if active and not (models_dir / active).is_file():
             active = None
@@ -503,11 +512,13 @@ class Orchestrator:
     def download_model(self, url: str) -> DownloadData:
         with mutation_lock(self.root):
             try:
-                return download_model(url, self._models_dir())
+                result = download_model(url, self._models_dir())
             except (ModelDownloadError, OSError) as e:
                 raise EngineError(
                     ExitCode.NETWORK_ERROR, f"Model download failed: {e}"
                 ) from e
+            clear_model_cache()
+            return result
 
     def set_active_model(self, name: str) -> ModelsData:
         """Mark a model as the one the server launches (persisted in config)."""
@@ -524,6 +535,7 @@ class Orchestrator:
                 raise EngineError(ExitCode.NOT_AVAILABLE, str(e)) from e
             except ModelDownloadError as e:
                 raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
+            clear_model_cache()
             if self.cfg.active_model == name:
                 self.save_config({"active_model": ""})
         return self.list_models()

@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .backends.prebuilt import emit_progress
 from .download import DownloadCancelled, DownloadError, stream_download
@@ -81,6 +82,59 @@ def list_models(models_dir: Path) -> list[ModelInfo]:
     return infos
 
 
+def _dir_fingerprint(models_dir: Path) -> tuple[Any, ...]:
+    """A cheap signature of the tree: names, sizes and mtimes of .gguf files.
+
+    Enough to detect a model being added, removed, renamed, completed or
+    deleted, which is what a cached listing must react to. Deliberately much
+    cheaper than a full ``stat`` per file when nothing has changed, because
+    this is what the dashboard's poll calls.
+    """
+    entries: list[tuple[str, int, float]] = []
+    try:
+        for path in models_dir.rglob("*.gguf"):
+            if _skip_hidden(path, models_dir):
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            entries.append((_rel_model_name(path, models_dir), st.st_size, st.st_mtime))
+    except OSError:
+        return ()
+    return tuple(sorted(entries))
+
+
+#: Cached listings keyed by models dir. A dashboard poll calls this every few
+#: seconds; re-listing a large .gguf library each time hammers the disk, so the
+#: result is reused until the tree actually changes.
+_MODEL_LISTING_CACHE: dict[Path, tuple[tuple[Any, ...], list[ModelInfo]]] = {}
+
+
+def clear_model_cache() -> None:
+    """Drop the cached model listings (used by mutations that change the tree)."""
+    _MODEL_LISTING_CACHE.clear()
+
+
+def list_models_cached(models_dir: Path) -> list[ModelInfo]:
+    """:func:`list_models`, memoised until the directory contents change.
+
+    The fingerprint still walks the tree, so this is not free, but it avoids
+    the per-file ``stat`` + ``ModelInfo`` construction and the sort on every
+    poll, and it returns immediately for an unchanged library.
+    """
+    if not models_dir.is_dir():
+        return []
+    key = models_dir
+    fingerprint = _dir_fingerprint(models_dir)
+    cached = _MODEL_LISTING_CACHE.get(key)
+    if cached is not None and cached[0] == fingerprint:
+        return list(cached[1])
+    models = list_models(models_dir)
+    _MODEL_LISTING_CACHE[key] = (fingerprint, models)
+    return list(models)
+
+
 def model_name_from_url(url: str) -> str:
     """Derive the file name for a download URL.
 
@@ -138,8 +192,10 @@ def remove_model(models_dir: Path, name: str) -> None:
 
 __all__ = [
     "ModelDownloadError",
+    "clear_model_cache",
     "download_model",
     "list_models",
+    "list_models_cached",
     "model_name_from_url",
     "remove_model",
 ]

@@ -93,11 +93,16 @@ reproduction — confirm before acting.
       5 new tests, plus the GUI `fake_orch` fixture now stubs the probe so the
       suite does not spawn a real binary.
 
-- [ ] **Recursive model scan on every dashboard poll** — `status()` calls
-      `list_models()`, which `rglob`s the entire models directory, and the
-      Dashboard refresh timer fires every few seconds. With a large `.gguf`
-      library this hammers the disk. Cache the listing keyed on
-      `(dir, mtime)`, or move it to the Models page's own refresh.
+- [x] ~~**Recursive model scan on every dashboard poll**~~ — **done**:
+      added `model_store.list_models_cached()`, which memoises the listing
+      against a cheap fingerprint of the tree (name, size and mtime per
+      `.gguf`), plus `clear_model_cache()` which `download_model` /
+      `remove_model` call after they change the tree. `Orchestrator.list_models()`
+      uses the cached variant, so a poll over a large library no longer rebuilds
+      every `ModelInfo` row each time while still reacting immediately to a model
+      being added, removed, or completed. 6 new tests in
+      `tests/unit/test_model_store.py`.
+
 - [ ] **Blocking `stop()` on the GUI thread during shutdown** —
       `llamagui/gui/main_window.py` `closeEvent` calls `self._orch.stop()`
       synchronously; the POSIX path can sleep up to the 5 s
