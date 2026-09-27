@@ -274,12 +274,15 @@ reproduction — confirm before acting.
       snapshot to b10488 / commit 9d77fa172, but a current binary already differs
       (see above). Record the version the snapshot came from in the file header
       when refreshing, so the next diff has a baseline to compare against.
-- [ ] **`EngineError` exit codes are a coarse bucket** — `llamagui/cli.py`
-      `main()` maps `OSError` / `ValueError` / `RuntimeError` / `KeyError` /
-      `TypeError` to a single `UNEXPECTED_ERROR`. Consider mapping
-      `FileNotFoundError` / `PermissionError` to `NOT_AVAILABLE` with a clearer
-      message, since both are common user-facing states (missing model file,
-      read-only models directory).
+- [x] ~~**`EngineError` exit codes are a coarse bucket**~~ — **done**:
+      `cli.main()` now maps `FileNotFoundError`, `PermissionError` and
+      `NotADirectoryError` to `NOT_AVAILABLE` (2) with a plain-language message
+      from the new `_describe_os_error()`, instead of lumping them in with
+      `UNEXPECTED_ERROR` (1). A script can now tell "your setup is wrong" from
+      "the engine broke". The mapping is deliberately narrow: a generic `OSError`
+      and `RuntimeError` still exit 1, and two tests pin that so it cannot
+      quietly widen into swallowing real faults. 6 new tests in `test_cli.py`.
+
 - [ ] **No coverage measurement despite `clean.py` supporting it** —
       `pyproject.toml` has no `pytest-cov` / coverage gate even though
       `scripts/clean.py` removes `htmlcov` and `coverage.xml`. Add coverage

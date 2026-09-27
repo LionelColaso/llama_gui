@@ -4,6 +4,8 @@ import contextlib
 import io
 import json
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -111,3 +113,57 @@ def test_use_auto_install_obtains_the_backend(
     assert (tmp_path / "state" / "active.txt").read_text(encoding="utf-8").strip() == (
         backend
     )
+
+
+# ─── exit codes for user-facing filesystem errors ─────────────────────────
+
+
+def _envelope_for(exc: Exception, tmp_path: Path) -> dict[str, Any]:
+    """Run one CLI action that raises ``exc``, and return its JSON envelope."""
+    out = io.StringIO()
+    with (
+        patch("llamagui.cli.Orchestrator.status", side_effect=exc),
+        contextlib.redirect_stdout(out),
+    ):
+        code = main(["--root", str(tmp_path), "status", "--json"])
+    assert code != 0
+    envelope: dict[str, Any] = json.loads(out.getvalue())
+    return envelope
+
+
+def test_missing_file_exits_not_available(tmp_path: Path) -> None:
+    """A missing model/file is a setup problem (2), not an engine fault (1)."""
+    env = _envelope_for(FileNotFoundError(2, "No such file", "/x/m.gguf"), tmp_path)
+    assert env["exit_code"] == 2
+    assert env["ok"] is False
+
+
+def test_permission_error_exits_not_available(tmp_path: Path) -> None:
+    env = _envelope_for(PermissionError(13, "denied", "/ro/models"), tmp_path)
+    assert env["exit_code"] == 2
+
+
+def test_permission_error_suggests_a_fix(tmp_path: Path) -> None:
+    """The message must tell the user what to do, not name the exception type."""
+    env = _envelope_for(PermissionError(13, "denied", "/ro/models"), tmp_path)
+    message = str(env["error"])
+    assert "Permission denied" in message
+    assert "write access" in message
+    assert "PermissionError" not in message
+
+
+def test_not_a_directory_exits_not_available(tmp_path: Path) -> None:
+    env = _envelope_for(NotADirectoryError(20, "not a dir", "/x/f"), tmp_path)
+    assert env["exit_code"] == 2
+    assert "Not a directory" in str(env["error"])
+
+
+def test_other_os_errors_stay_unexpected(tmp_path: Path) -> None:
+    """A generic OSError is still a fault: the mapping must stay narrow."""
+    env = _envelope_for(OSError(5, "I/O error", "/dev/x"), tmp_path)
+    assert env["exit_code"] == 1
+
+
+def test_runtime_errors_stay_unexpected(tmp_path: Path) -> None:
+    env = _envelope_for(RuntimeError("boom"), tmp_path)
+    assert env["exit_code"] == 1

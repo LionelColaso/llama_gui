@@ -245,6 +245,20 @@ def _force_utf8_stdio() -> None:
                 stream.reconfigure(encoding="utf-8")
 
 
+def _describe_os_error(e: OSError) -> str:
+    """A plain-language message for a filesystem problem.
+
+    These reach the user, not a log reader, so the message says what to do
+    rather than naming the exception type. ``PermissionError`` in particular is
+    almost always a read-only or unowned directory.
+    """
+    if isinstance(e, PermissionError):
+        return f"Permission denied: {e.filename or ''}. Check the path's ownership and write access.".rstrip()
+    if isinstance(e, NotADirectoryError):
+        return f"Not a directory: {e.filename or ''}. A file is in the way.".rstrip()
+    return f"Not found: {e.filename or str(e)}"
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -301,6 +315,21 @@ def main(argv: list[str] | None = None) -> int:
             False,
             ExitCode.NETWORK_ERROR,
             error=str(e),
+            warnings=warnings,
+            root=root_str,
+        )
+        return emit(env, use_json)
+    except (FileNotFoundError, PermissionError, NotADirectoryError) as e:
+        # Common user-facing states, not engine faults: a missing model file, a
+        # read-only models directory, a path that is not a directory. These
+        # deserve their own exit code and a message without a traceback-style
+        # type prefix, so a script can tell "your setup is wrong" from
+        # "something broke".
+        env = build_env(
+            args.action,
+            False,
+            ExitCode.NOT_AVAILABLE,
+            error=_describe_os_error(e),
             warnings=warnings,
             root=root_str,
         )
