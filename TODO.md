@@ -247,10 +247,17 @@ reproduction — confirm before acting.
       section/invariant numbers; and the missing `scripts/check_server_args` was
       **built** (not deleted), so the `serverargs` docstring is now true. See
       the P3 catalogue-drift task below for what it immediately found.
-- [ ] **README page list is stale** — it advertises "Dashboard, Actions,
-      Resolver, Models, Logs, Settings", but the shipped sidebar is
-      "Dashboard, Server options, Logs, Settings, Downloads" (Actions and
-      Resolver were folded into the Dashboard). Update §Features.
+- [x] ~~**README page list is stale**~~ — **done**: the Features bullet now
+      names the shipped sidebar (Dashboard, Server options, Logs, Settings,
+      Downloads) and what each one is for, replacing the "Dashboard, Actions,
+      Resolver, Models, Logs, Settings" list from before those pages were folded
+      into the Dashboard.
+- [x] ~~**`mapping.md` header mentions a `vendor/` submodule that no longer
+      exists**~~ — **done**: the generated header now lists only the extra
+      exclusions that actually exist on disk, so it can no longer claim a
+      directory that has been removed. `vendor` stays in `ALWAYS_IGNORE`
+      defensively (documented in the code) so a vendored tree could never leak
+      into the map if reintroduced.
 - [ ] **The server-arg catalogue is behind a current `llama-server`** — found by
       the new `scripts/check_server_args.py` against a real binary (winget
       `ggml.llamacpp`); the committed snapshot itself is still in sync. These
@@ -267,9 +274,6 @@ reproduction — confirm before acting.
       snapshot to b10488 / commit 9d77fa172, but a current binary already differs
       (see above). Record the version the snapshot came from in the file header
       when refreshing, so the next diff has a baseline to compare against.
-- [ ] **`mapping.md` header mentions a `vendor/` submodule that no longer
-      exists** — regenerate, and adjust the header text emitted by
-      `scripts/mapping.py`.
 - [ ] **`EngineError` exit codes are a coarse bucket** — `llamagui/cli.py`
       `main()` maps `OSError` / `ValueError` / `RuntimeError` / `KeyError` /
       `TypeError` to a single `UNEXPECTED_ERROR`. Consider mapping

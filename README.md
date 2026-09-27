@@ -13,7 +13,10 @@ A PySide6 desktop app that drives [`llama-server`](https://github.com/ggml-org/l
 - **Model library:** the Models page lists the `.gguf` files in your models directory, downloads a model from a URL, sets the active model, and deletes models. The server is launched directly with the active model.
 - **Auto-install / first run:** a first-run dialog appears when nothing resolves yet, offering a download or the OS-install toggle. `bootstrap` downloads what is missing and activates it.
 - **Durable settings:** paths, chosen backend and CUDA-runtime mode live in a platform-native config dir (`%APPDATA%/llamagui`, `~/.config/llamagui`, `~/Library/Preferences/llamagui`) and survive restarts; a corrupt file is backed up, not overwritten. The GitHub token is kept only in the OS keyring.
-- **GUI:** Dashboard, Actions, Resolver, Models, Logs, Settings; system-tray with minimize-to-tray.
+- **GUI:** Dashboard (backends + models, with launch/stop), Server options (every
+  `llama-server` flag, generated from the same catalogue the CLI uses), Logs,
+  Settings, and Downloads (resume/discard interrupted transfers);
+  system-tray with minimize-to-tray.
 - **CLI:** typed envelope + exit codes for scripting and tests (`--json`).
 
 ## Requirements
