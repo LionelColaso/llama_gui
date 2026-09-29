@@ -18,7 +18,7 @@ dev = [
   "pytest-cov>=5",
   "ruff>=0.6",
   "mypy>=1.11",
-  "pyright>=1.1",
+  "pyright>=1.1.414",
   "ordered-set",
   "zstandard",
 ]
