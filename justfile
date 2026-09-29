@@ -5,6 +5,8 @@ set shell := ["cmd.exe", "/C"]
 # ─── Global Variables ────────────────────────────────────────────────────
 # Shared flag values to keep recipes DRY and consistent.
 config_and_path := "--config pyproject.toml ."
+pytest_opts := "-m \"not integration\" --no-qt-log -s"
+cov_opts := "--cov=llamagui --cov-report=xml --cov-report=html --cov-report=term-missing --junitxml=junit/test-results.xml"
 
 # ─── Default Target ──────────────────────────────────────────────────────
 default: check
@@ -18,16 +20,20 @@ run:
     uv run python -m llamagui
 
 # Run all tests (unit + gui, skip integration)
-test:
-    uv run pytest -m "not integration" -q
+test: dev-setup
+    uv run pytest {{pytest_opts}} -q
 
 # Run tests with verbose output and short tracebacks
-test-verbose:
-    uv run pytest -m "not integration" -v --tb=short
+test-verbose: dev-setup
+    uv run pytest {{pytest_opts}} -v --tb=short
 
 # Run every test including the (network/root-requiring) integration suite
-test-all:
-    uv run pytest -v
+test-all: dev-setup
+    uv run pytest {{pytest_opts}} -v
+
+# Run tests and emit an HTML coverage report + XML for CI uploads
+coverage: dev-setup
+    uv run pytest {{pytest_opts}} {{cov_opts}}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Code Quality

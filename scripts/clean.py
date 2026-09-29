@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DIRS = ["build", "dist", ".pytest_cache", ".ruff_cache", ".mypy_cache", "htmlcov"]
 FILES = ["coverage.xml", ".coverage"]
+DIRS += ["junit"]
 
 
 def main() -> int:
