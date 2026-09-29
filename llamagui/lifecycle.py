@@ -378,13 +378,10 @@ def stop_processes(
     pids = _read_pids(root)
     stopped: list[int] = []
 
-    # The server pid; a legacy "llama_swap" key (pre-llama-server-direct builds)
-    # is honoured too so an upgrade never leaves an orphaned process behind.
     targets: list[int] = []
-    for key in ("llama_server", "llama_swap"):
-        pid = pids.get(key)
-        if isinstance(pid, int):
-            targets.append(pid)
+    pid = pids.get("llama_server")
+    if isinstance(pid, int):
+        targets.append(pid)
     servers: dict[str, Any] = pids.get("servers", {}) or {}
     targets.extend(pid for pid in servers.values() if isinstance(pid, int))
 
@@ -422,7 +419,7 @@ def stop_processes(
 def running_pids(root: Path) -> list[int]:
     """PIDs recorded by this app that are still alive."""
     pids = _read_pids(root)
-    server_pid = cast("int | None", pids.get("llama_server") or pids.get("llama_swap"))
+    server_pid = cast("int | None", pids.get("llama_server"))
     servers = cast("dict[str, int]", pids.get("servers", {}) or {})
     candidates: list[int | None] = [server_pid, *servers.values()]
     return [p for p in candidates if isinstance(p, int) and _pid_exists(p)]

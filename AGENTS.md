@@ -173,8 +173,7 @@ drivable surface. `contract_version` is `"4"`.
 8. **Stop kills only PIDs the app spawned.** The engine keeps
    `state/pids.json` (`{llama_server: <pid>, servers: {…}}`); Stop terminates
    **exactly those**, then verifies the port is free. Never scan-and-kill by
-   name or path. (A legacy `llama_swap` pid key is still honored so an upgrade
-   from a pre-direct-server build never orphans a process.) Stale pids are
+   name or path. Stale pids are
    dropped; a live-but-not-ours holder is reported as "port held by unknown
    process", never killed.
 9. **Health probe:** `/health`; model list `/v1/models`. A `/v1` 404 is not

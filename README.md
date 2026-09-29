@@ -2,7 +2,9 @@
 
 A PySide6 desktop app that drives [`llama-server`](https://github.com/ggml-org/llama.cpp) directly on **Windows, Linux, and macOS**. The app's only external component is the `llama-server` binary itself — a *backend location* (a folder you point at, a managed prebuilt download, or `PATH`) plus llama.cpp is the entire external surface of the app. It resolves and installs the server binary, manages a library of `.gguf` models (list, download, set active, delete), and launches, monitors, and stops the server through a GUI and a machine-readable CLI.
 
-> **Positioning:** this is a GUI for llama.cpp and nothing else — it wraps no other server or router. (llama-swap, the model-swapping router used by early builds of this app, was removed; only backward-compat *reads* of its legacy `llama_swap` pid key remain.)
+[![codecov](https://codecov.io/gh/LionelColaso/llama_gui/graph/badge.svg?token=f7733256-a8cf-4159-830f-46f75400159f)](https://codecov.io/gh/LionelColaso/llama_gui)
+
+> **Positioning:** this is a GUI for llama.cpp and nothing else — it wraps no other server or router. (llama-swap, the model-swapping router used by early builds of this app, was removed.)
 
 ## Features
 

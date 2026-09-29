@@ -10,6 +10,8 @@
     "**/resources/**",
     "**/vendor/**",
     "**/*.md",
-    "**/docs/reference/**"
+    "**/docs/reference/**",
+    "coverage.xml",
+    ".coverage"
   ]
 }

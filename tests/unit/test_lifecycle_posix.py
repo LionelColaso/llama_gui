@@ -77,7 +77,7 @@ def test_stop_processes_only_kills_recorded_pids(tmp_path: Path) -> None:
     from llamagui.lifecycle import _write_pids
 
     try:
-        _write_pids(tmp_path, {"llama_swap": target.pid, "servers": {}})
+        _write_pids(tmp_path, {"llama_server": target.pid, "servers": {}})
         result = lifecycle.stop_processes(tmp_path)
         assert target.pid in result["stopped_pids"]
         # The survivor (not recorded) is left untouched.

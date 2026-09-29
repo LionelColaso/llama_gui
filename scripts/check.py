@@ -28,7 +28,18 @@ _STEPS: tuple[tuple[str, list[str], bool], ...] = (
     ("actionlint", ["actionlint"], True),
     (
         "pytest (unit + gui)",
-        ["uv", "run", "pytest", "-m", "not integration", "-v", "--tb=short"],
+        [
+            "uv",
+            "run",
+            "pytest",
+            "-m",
+            "not integration",
+            "-v",
+            "--tb=short",
+            "--doctest-modules",
+            "--no-qt-log",
+            "-s",
+        ],
         False,
     ),
 )

@@ -15,3 +15,8 @@ nuitka-crash-report*.xml
 # Local build verification logs
 build_err.log
 build_local.log
+
+# Test artifacts
+.coverage
+coverage.xml
+junit.xml

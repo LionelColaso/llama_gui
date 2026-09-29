@@ -7,7 +7,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-DIRS = ["build", "dist", ".pytest_cache", ".ruff_cache", ".mypy_cache", "htmlcov"]
+DIRS = [
+    "build",
+    "dist",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "htmlcov",
+    "junit",
+]
 FILES = ["coverage.xml", ".coverage"]
 
 

@@ -285,10 +285,7 @@ reproduction — confirm before acting.
       and `RuntimeError` still exit 1, and two tests pin that so it cannot
       quietly widen into swallowing real faults. 6 new tests in `test_cli.py`.
 
-- [ ] **No coverage measurement despite `clean.py` supporting it** —
-      `pyproject.toml` has no `pytest-cov` / coverage gate even though
-      `scripts/clean.py` removes `htmlcov` and `coverage.xml`. Add coverage
-      reporting (at minimum in CI) so the P2 gaps stay visible over time.
+- [x] **Coverage measurement via `pytest-cov`** — `pyproject.toml` now declares `pytest-cov>=5` in `[dependency-groups].dev` and carries `[tool.coverage.run]`, `[tool.coverage.report]`, and `[tool.coverage.html]` config (source = `llamagui`, branch tracing, 80 % fail-under). The `justfile` runs coverage on every `test` / `check` recipe (`--cov=llamagui --cov-report=term-missing`) and exposes a dedicated `coverage` target that emits HTML + XML. CI (`pytest.yml`) uploads the per-OS report artifact so P2 gaps stay visible over time.
 - [ ] **Consider splitting `llamagui/serverargs.py`** (2 114 lines) — the
       catalogue is data and the helpers are logic; separating them makes the
       data easy to regenerate and diff against
