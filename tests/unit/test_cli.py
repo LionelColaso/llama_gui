@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -9,7 +10,84 @@ from unittest.mock import patch
 
 import pytest
 
-from app.cli import main
+from app.cli import (
+    _FLAG_TOKEN_PREFIX,
+    _decode_flag_positional,
+    _encode_flag_positional,
+    main,
+)
+
+
+class TestFlagPositionalArgv:
+    """``set-arg <flag>`` takes a token starting with a dash (regression).
+
+    argparse read it as an option of the ``set-arg`` sub-parser and rejected it,
+    so the documented ``set-arg <flag> [value]`` form failed for every real flag.
+    """
+
+    def test_the_flag_is_hidden_from_argparse_then_restored(self) -> None:
+        encoded = _encode_flag_positional(["set-arg", "--ctx-size", "16384", "--json"])
+        assert encoded == [
+            "set-arg",
+            f"{_FLAG_TOKEN_PREFIX}--ctx-size",
+            "16384",
+            "--json",
+        ], "only the flag is encoded; trailing options must still parse"
+
+    def test_a_short_alias_is_encoded_too(self) -> None:
+        assert _encode_flag_positional(["set-arg", "-t", "40"])[1] == (
+            f"{_FLAG_TOKEN_PREFIX}-t"
+        )
+
+    def test_a_plain_positional_is_untouched(self) -> None:
+        argv = ["set-arg", "not-a-flag", "value"]
+        assert _encode_flag_positional(argv) == argv
+
+    def test_other_actions_are_untouched(self) -> None:
+        argv = ["server-args", "--flag", "--ctx-size"]
+        assert _encode_flag_positional(argv) == argv
+
+    def test_decode_restores_the_flag(self) -> None:
+        args = argparse.Namespace(flag=f"{_FLAG_TOKEN_PREFIX}--ctx-size")
+        _decode_flag_positional(args)
+        assert args.flag == "--ctx-size"
+
+    def test_decode_leaves_an_untouched_flag_alone(self) -> None:
+        args = argparse.Namespace(flag="--ctx-size")
+        _decode_flag_positional(args)
+        assert args.flag == "--ctx-size"
+
+    def test_set_arg_with_a_dash_flag_end_to_end(self, tmp_path: Path) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(
+                ["--root", str(tmp_path), "set-arg", "--flash-attn", "on", "--json"]
+            )
+        assert code == 0
+        envelope = json.loads(out.getvalue())
+        assert envelope["data"]["args"][0]["flag"] == "--flash-attn"
+        assert envelope["data"]["scope"] == "global"
+
+    def test_set_arg_scoped_to_a_model_end_to_end(self, tmp_path: Path) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(
+                [
+                    "--root",
+                    str(tmp_path),
+                    "set-arg",
+                    "--ctx-size",
+                    "16384",
+                    "--model",
+                    "big.gguf",
+                    "--json",
+                ]
+            )
+        assert code == 0
+        data = json.loads(out.getvalue())["data"]
+        assert data["scope"] == "model"
+        assert data["model"] == "big.gguf"
+        assert data["args"][0]["value"] == "16384"
 
 
 def test_describe_json() -> None:

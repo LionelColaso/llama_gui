@@ -25,8 +25,9 @@ import sys
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO, TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -34,6 +35,9 @@ from .paths import is_windows
 from .schemas import EngineError, ExitCode
 from .serverargs import options_to_cli
 from .state import check_port
+
+if TYPE_CHECKING:
+    from .config import AppConfig
 
 PIDS_FILE = "state/pids.json"
 
@@ -166,6 +170,115 @@ def _spawn_kwargs() -> dict[str, Any]:
 
 
 # ─── Launch ───────────────────────────────────────────────────────────────
+
+#: Dedicated flags a per-model scope may override. ``--host``/``--port`` are
+#: excluded on purpose: the app probes exactly one host:port for health, status
+#: and stop, so letting one model move it would strand the rest.
+MODEL_SCOPABLE_DEDICATED = ("--ctx-size", "--n-gpu-layers")
+
+#: The two dedicated flags that are always global, for the same reason.
+GLOBAL_ONLY_DEDICATED = ("--host", "--port")
+
+#: Text forms the dedicated flags accept besides a plain number.
+_AUTO_WORDS = ("auto", "default")
+_ALL_WORDS = ("auto", "all", "default")
+
+
+@dataclass(frozen=True)
+class LaunchSettings:
+    """Everything :func:`build_llama_server_args` needs for one launch."""
+
+    host: str
+    port: int
+    ctx_size: int
+    n_gpu_layers: int
+    extra_args: str
+    options: dict[str, str]
+
+
+def dedicated_value_text(flag: str, value: int) -> str:
+    """Render a dedicated flag's int as the text its editor shows.
+
+    The inverse of :func:`dedicated_value_int`; ``-1`` ("auto") is blank, so an
+    empty field means "let llama.cpp decide", exactly like the other rows.
+    """
+    if flag == "--ctx-size":
+        return str(value) if value > 0 else ""
+    if flag == "--n-gpu-layers":
+        if value < 0:
+            return ""
+        if value == 999:
+            return "all"
+        return str(value)
+    return str(value)
+
+
+def dedicated_value_int(flag: str, text: str, default: int) -> int:
+    """Parse a dedicated flag's editor text back to the int the config stores.
+
+    Blank / ``auto`` / ``all`` map to ``-1`` (llama.cpp's "decide for me"), a
+    number is taken as-is, and anything else falls back to ``default`` so a
+    hand-edited file cannot put a non-numeric ``-c`` on the command line.
+    """
+    value = text.strip().lower()
+    if not value:
+        return -1
+    if flag == "--n-gpu-layers" and value in _ALL_WORDS:
+        return -1
+    if flag == "--ctx-size" and value in _AUTO_WORDS:
+        return -1
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def model_server_options(cfg: AppConfig, model: str | None = None) -> dict[str, str]:
+    """The catalogue options that actually apply to ``model``.
+
+    No entry for the model means it follows the global defaults; an entry means
+    it runs on its own values alone (see
+    :attr:`AppConfig.model_server_options`). Either way this is what the GUI
+    shows row by row for the model.
+    """
+    entry = cfg.model_server_options.get(model or "")
+    if entry is None:
+        return dict(cfg.server_options)
+    return dict(entry)
+
+
+def uses_global_server_config(cfg: AppConfig, model: str | None = None) -> bool:
+    """True when ``model`` has no own entry, i.e. it follows the global defaults."""
+    return model is not None and model not in cfg.model_server_options
+
+
+def launch_settings(cfg: AppConfig, model: str | None = None) -> LaunchSettings:
+    """Resolve the settings for launching ``model``.
+
+    The global defaults apply until a model has an entry of its own, at which
+    point its values alone decide and a blank flag means "let llama.cpp decide"
+    rather than "inherit". ``host``/``port`` and the raw extra args are always
+    global: the app probes exactly one host:port for health, status and stop.
+    """
+    entry = cfg.model_server_options.get(model or "")
+    if entry is None:
+        options = dict(cfg.server_options)
+        ctx_size = cfg.ctx_size
+        n_gpu_layers = cfg.n_gpu_layers
+    else:
+        options = dict(entry)
+        ctx_size = dedicated_value_int("--ctx-size", options.get("--ctx-size", ""), -1)
+        n_gpu_layers = dedicated_value_int(
+            "--n-gpu-layers", options.get("--n-gpu-layers", ""), -1
+        )
+    return LaunchSettings(
+        host=cfg.host,
+        port=cfg.port,
+        ctx_size=ctx_size,
+        n_gpu_layers=n_gpu_layers,
+        extra_args=cfg.extra_server_args,
+        options=options,
+    )
 
 
 def build_llama_server_args(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox, QPushButton
 from pytestqt.qtbot import QtBot
 
 from app.gui.sections.models import ModelsSection
@@ -80,3 +80,57 @@ class TestModelsSection:
         qtbot.wait(50)
 
         assert offered == [True], "the prompt should happen on first show, once"
+
+    def test_server_options_button_asks_for_the_selected_model(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        page = ModelsSection(fake_orch)
+        qtbot.addWidget(page)
+        page._table.load_models([{"name": "big.gguf"}], active=None)
+        page._table.selectRow(0)
+
+        asked: list[str] = []
+        page.server_options_requested.connect(asked.append)
+        page._server_options_btn.click()
+
+        assert asked == ["big.gguf"]
+
+    def test_server_options_button_needs_a_selection(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        page = ModelsSection(fake_orch)
+        qtbot.addWidget(page)
+        page._table.load_models([{"name": "big.gguf"}], active=None)
+
+        asked: list[str] = []
+        page.server_options_requested.connect(asked.append)
+        page._server_options_btn.click()
+
+        assert asked == []
+        assert "Select a model" in page._status_label.text()
+
+    def test_every_action_button_is_in_the_layout(
+        self, qtbot: QtBot, fake_orch: MagicMock
+    ) -> None:
+        """A built-but-unattached row is invisible: the buttons must be reachable."""
+        page = ModelsSection(fake_orch)
+        qtbot.addWidget(page)
+        page.show()
+
+        labels = sorted(
+            btn.text() for btn in page.findChildren(QPushButton) if btn.parent() is page
+        )
+        assert labels == [
+            "Download…",
+            "Open folder",
+            "Refresh",
+            "Remove",
+            "Server options…",
+            "Set active",
+        ]
+        # And visible ones, so a hidden row cannot pass on a stray parent.
+        assert all(
+            btn.isVisible()
+            for btn in page.findChildren(QPushButton)
+            if btn.parent() is page
+        )

@@ -115,6 +115,48 @@ def test_resolver_page_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
     assert page._server_row is not None
 
 
+def test_the_models_tab_opens_the_per_model_popup(
+    qtbot: QtBot, fake_orch: MagicMock
+) -> None:
+    """The button opens the popup for the selected model, leaving the page alone."""
+    from unittest.mock import patch
+
+    with (
+        patch("app.gui.main_window.Orchestrator", return_value=fake_orch),
+        patch("app.gui.main_window.ModelServerOptionsDialog") as dialog_cls,
+    ):
+        dialog_cls.return_value.exec.return_value = 0
+        w = MainWindow()
+        qtbot.addWidget(w)
+
+        w._models.server_options_requested.emit("big.gguf")
+
+    assert dialog_cls.call_args.args[1] == "big.gguf"
+    assert w._server_args._scope is None, "the global page stays the global page"
+
+
+def test_closing_the_popup_resyncs_the_server_options_page(
+    qtbot: QtBot, fake_orch: MagicMock
+) -> None:
+    """The model may now have its own config, which the page's scope shows."""
+    from unittest.mock import patch
+
+    with (
+        patch("app.gui.main_window.Orchestrator", return_value=fake_orch),
+        patch("app.gui.main_window.ModelServerOptionsDialog") as dialog_cls,
+    ):
+        dialog = dialog_cls.return_value
+        dialog.exec.return_value = 1
+        dialog.model = "big.gguf"
+        w = MainWindow()
+        qtbot.addWidget(w)
+
+        w._models.server_options_requested.emit("big.gguf")
+
+    assert w._server_args._scope == "big.gguf"
+    assert isinstance(w, MainWindow)
+
+
 def test_engine_worker_runs(qtbot: QtBot, fake_orch: MagicMock) -> None:
     from app.gui.worker_pool import EngineWorker
 

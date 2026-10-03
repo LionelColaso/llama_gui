@@ -9,16 +9,22 @@ from unittest.mock import patch
 
 import pytest
 
+from app.config import AppConfig
 from app.lifecycle import (
     _TERM_GRACE_SECONDS,
     _pid_exists,
     _read_pids,
     _write_pids,
     build_llama_server_args,
+    dedicated_value_int,
+    dedicated_value_text,
     launch_llama_server,
+    launch_settings,
+    model_server_options,
     read_log_tail,
     running_pids,
     stop_processes,
+    uses_global_server_config,
     verify_launch,
     wait_for_port,
 )
@@ -289,3 +295,115 @@ def test_stop_processes_keeps_the_default_grace(fake_root: Path) -> None:
     with _stop_grace_recorder() as recorder:
         stop_processes(fake_root)
     assert recorder.graces == [_TERM_GRACE_SECONDS]
+
+
+class TestLaunchSettings:
+    """Global defaults for a model with no config of its own; its own otherwise."""
+
+    @staticmethod
+    def _cfg(**kwargs: object) -> AppConfig:
+        return AppConfig(root=str(Path("C:/tmp/root")), **kwargs)  # type: ignore[arg-type]
+
+    def test_no_model_uses_the_global_defaults(self) -> None:
+        cfg = self._cfg(ctx_size=4096, server_options={"--flash-attn": "on"})
+        settings = launch_settings(cfg, None)
+        assert settings.ctx_size == 4096
+        assert settings.options["--flash-attn"] == "on"
+
+    def test_a_model_with_no_config_follows_the_globals(self) -> None:
+        cfg = self._cfg(ctx_size=4096, server_options={"--flash-attn": "on"})
+        settings = launch_settings(cfg, "big.gguf")
+        assert settings.ctx_size == 4096
+        assert settings.options["--flash-attn"] == "on"
+        assert uses_global_server_config(cfg, "big.gguf") is True
+
+    def test_an_own_config_wins_over_the_globals(self) -> None:
+        cfg = self._cfg(
+            ctx_size=4096,
+            server_options={"--flash-attn": "on"},
+            model_server_options={"big.gguf": {"--ctx-size": "16384"}},
+        )
+        settings = launch_settings(cfg, "big.gguf")
+        assert settings.ctx_size == 16384
+        assert uses_global_server_config(cfg, "big.gguf") is False
+
+    def test_an_own_config_ignores_the_globals_entirely(self) -> None:
+        """Its own values alone decide; a flag it omits is the binary's default."""
+        cfg = self._cfg(
+            ctx_size=4096,
+            server_options={"--flash-attn": "on"},
+            model_server_options={"big.gguf": {"--jinja": "on"}},
+        )
+        settings = launch_settings(cfg, "big.gguf")
+        assert settings.ctx_size == -1, "no ctx of its own means 'let the model decide'"
+        assert settings.options == {"--jinja": "on"}
+        assert launch_settings(cfg, "small.gguf").options["--flash-attn"] == "on"
+
+    def test_an_empty_own_config_is_still_an_own_config(self) -> None:
+        """``{}`` means 'my own settings, all default' — not 'inherit'."""
+        cfg = self._cfg(
+            ctx_size=4096,
+            server_options={"--flash-attn": "on"},
+            model_server_options={"big.gguf": {}},
+        )
+        settings = launch_settings(cfg, "big.gguf")
+        assert settings.options == {}
+        assert settings.ctx_size == -1
+        assert uses_global_server_config(cfg, "big.gguf") is False
+
+    def test_an_own_config_can_turn_a_global_flag_off(self) -> None:
+        """The model scope holds a value, not an on/off: "off" must win."""
+        cfg = self._cfg(
+            server_options={"--flash-attn": "on"},
+            model_server_options={"big.gguf": {"--flash-attn": "off"}},
+        )
+        assert launch_settings(cfg, "big.gguf").options["--flash-attn"] == "off"
+        # Another model still gets the global default.
+        assert model_server_options(cfg, "small.gguf")["--flash-attn"] == "on"
+
+    def test_dedicated_flags_are_never_emitted_twice(self) -> None:
+        """-c comes from the dedicated field, so it must appear exactly once."""
+        cfg = self._cfg(
+            model_server_options={"big.gguf": {"--ctx-size": "16384"}},
+        )
+        settings = launch_settings(cfg, "big.gguf")
+        cmd = build_llama_server_args(
+            "llama-server",
+            "big.gguf",
+            ctx_size=settings.ctx_size,
+            n_gpu_layers=settings.n_gpu_layers,
+            server_options=settings.options,
+        )
+        assert cmd.count("-c") == 1
+        assert cmd[cmd.index("-c") + 1] == "16384"
+
+    def test_a_bad_own_value_falls_back_to_the_default(
+        self,
+    ) -> None:
+        cfg = self._cfg(
+            model_server_options={"big.gguf": {"--ctx-size": "huge"}},
+        )
+        assert launch_settings(cfg, "big.gguf").ctx_size == -1
+
+
+class TestDedicatedValueText:
+    @pytest.mark.parametrize(
+        ("flag", "value", "text", "parsed"),
+        [
+            ("--ctx-size", 8192, "8192", 8192),
+            ("--ctx-size", -1, "", -1),
+            ("--n-gpu-layers", 33, "33", 33),
+            # "all" and -1 both mean "as many as fit"; the editor says "all".
+            ("--n-gpu-layers", 999, "all", -1),
+            ("--n-gpu-layers", -1, "", -1),
+        ],
+    )
+    def test_text_and_int_agree(
+        self, flag: str, value: int, text: str, parsed: int
+    ) -> None:
+        assert dedicated_value_text(flag, value) == text
+        assert dedicated_value_int(flag, text, -99) == parsed
+
+    def test_auto_words_mean_auto(self) -> None:
+        assert dedicated_value_int("--ctx-size", "auto", 4096) == -1
+        assert dedicated_value_int("--n-gpu-layers", "all", 999) == -1

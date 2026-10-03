@@ -8,14 +8,15 @@ from PySide6.QtWidgets import QComboBox, QDialog, QLineEdit, QPushButton
 from pytestqt.qtbot import QtBot
 
 from app.gui.dialogs.relocate import RelocateDialog
-from app.gui.pages.server_args import ServerArgsPage, _PathEdit
+from app.gui.pages.server_args import ServerArgsPage
 from app.gui.pages.settings import SettingsPage
+from app.gui.widgets.server_options_editor import _PathEdit
 from app.schemas import RelocationData, RelocationItem
 
 
 def _set_row_value(page: ServerArgsPage, flag: str, value: str) -> None:
     """Set ``value`` on the editor row for ``flag``, whatever its widget kind."""
-    for arg, editor in page._rows:
+    for arg, editor in page._editor._rows:
         if arg.flag != flag:
             continue
         if isinstance(editor, QComboBox):
@@ -403,8 +404,8 @@ class TestServerArgsPage:
         _set_row_value(page, "--n-gpu-layers", "33")
         _set_row_value(page, "__extra_args__", "--threads 8")
 
-        collected = page.collect()
-        # ServerArgsPage returns dedicated fields separately
+        collected = page._editor.collect_global()
+        # The global configuration returns dedicated fields separately
         assert collected["ctx_size"] == 8192
         assert collected["n_gpu_layers"] == 33
         assert collected["extra_server_args"] == "--threads 8"

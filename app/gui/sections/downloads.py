@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...download import DownloadControl
-from ..download_actions import DownloadActionsMixin
+from ..download_actions import DownloadActionsMixin, add_list_footer
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.progress_bar import ProgressWidget, _human
@@ -113,17 +113,9 @@ class DownloadsSection(DownloadActionsMixin, QWidget):
         self._list_layout = QVBoxLayout()
         layout.addLayout(self._list_layout)
 
-        btn_row = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setToolTip("Re-scan for partial downloads.")
-        refresh_btn.clicked.connect(self._load)
-        btn_row.addWidget(refresh_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        self._status_label = QLabel()
-        self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
+        self._status_label = add_list_footer(
+            layout, self._load, "Re-scan for partial downloads."
+        )
 
         self._load()
         self._shown = False

@@ -190,6 +190,26 @@ drivable surface. `contract_version` is `"4"`.
     appended last. The full option catalogue is **data** in
     `app/serverargs.py`, consumed by the GUI grid, the CLI
     (`server-args` / `set-arg` / `clear-args`) and the command-line builder.
+    Values are stored in **two scopes** that are alternatives, not layers:
+    `AppConfig.server_options` holds the **global** configuration, and
+    `AppConfig.model_server_options` (`{model file name: {flag: value}}`) holds
+    a model's **own** configuration. A model with **no entry** follows the
+    globals — that is the state every model starts in — and keeps following
+    their later edits; a model **with** an entry runs on that entry alone, where
+    an absent flag means "the binary's default wins". An **empty** entry `{}` is
+    a real, meaningful state ("my own settings, all default") and is kept by the
+    config loader. `lifecycle.launch_settings(cfg, model)` is the single merge
+    point, so launching, the CLI preview and the GUI preview all agree.
+    `lifecycle.model_server_options(cfg, model)` is the read side and
+    `lifecycle.uses_global_server_config(cfg, model)` the mode test; the popup's
+    *Save* / *Reset* go through `Orchestrator.save_model_server_config` /
+    `reset_model_server_config`. Resetting a model's own options writes empty
+    values rather than deleting the entry, because "no values" is not "inherit"
+    — the *Use global server config* checkbox is what hands a model back to the
+    globals. `--host` / `--port` and the raw *extra args* are deliberately
+    **global only**: the app probes exactly one `host:port` for health, status
+    and stop, so one model cannot move it out from under the rest (`--ctx-size`
+    and `--n-gpu-layers` are per-model).
 13. **App errors are always logged.** loguru writes every entry to
     `<data-root>/logs/llamagui.log` (10 MB rotation, 7-day retention, enqueued so
     worker threads are safe). Choke points: `cli.emit` (every envelope),
@@ -324,7 +344,15 @@ CREATE_NO_WINDOW` + `TerminateProcess`; POSIX `start_new_session` +
 `list-models`, `download-model <url>`, `set-model <name>`,
 `remove-model <name>`, `stop`, `launch [--verify]`, `restart [--verify]`,
 `list-assets`, `pending-downloads`, `discard-download <dest>`, `config`,
-`server-args [--flag]`, `set-arg <flag> [value]`, `clear-args`, and `gui`.
+`server-args [--flag] [--model NAME]`, `set-arg <flag> [value] [--model NAME]`,
+`clear-args [--model NAME] [--use-global]`, and `gui`. `--model` picks that
+model's **own** scope instead of the global one; `clear-args --model NAME`
+writes that model's empty configuration (every option at its default) while
+`--use-global` drops the entry so the model follows the globals again. The
+server-args payloads report which one they describe (`scope`: `global` |
+`model`, plus `model`) and carry `mode`: `global` when the model follows the
+global configuration, `own` when it runs on its own values — with every row
+marked `inherited` in a model scope that follows the globals.
 
 - `--json` prints a single JSON **envelope**:
   `{ contract_version, ok, exit_code, action, root, timestamp, duration_ms, data, error?, log_tail?, warnings? }`.
@@ -403,7 +431,8 @@ llama_gui/
 │   ├── schemas.py                 # contract v4 models (StatusData, InstallData, …)
 │   ├── orchestrator.py            # actions, locking, wiring
 │   ├── resolver.py                # llama-server resolver (backend location + OS toggle)
-│   ├── lifecycle.py               # launch/verify/stop + the pid file
+│   ├── lifecycle.py               # launch/verify/stop + the pid file + launch_settings
+│   │                              #   (global defaults merged with a model's overrides)
 │   ├── state.py                   # pure reads: active backend, .version, current link, port
 │   ├── links.py                   # the `managed/current` link (symlink / mklink /J)
 │   ├── progress.py                # the PROGRESS stderr line protocol (§11)
@@ -424,12 +453,15 @@ llama_gui/
     ├── download_actions.py        # download slots shared by a page and a section
     ├── dialogs/first_run.py       # shown when nothing resolves
     ├── dialogs/relocate.py        # offered when a path change would strand data
+    ├── dialogs/model_server_options.py  # per-model server options popup
     ├── pages/                     # the 5 sidebar pages: dashboard, models,
     │                              #   server_args, logs, settings
     ├── sections/                  # panels: backends (dashboard), models +
     │                              #   downloads (the models tab)
     └── widgets/                   # backend_card, log_view, model_table, path_picker,
-                                   #   progress_bar, source_badge
+                                   #   progress_bar, source_badge,
+                                   #   server_options_editor (shared by the page
+                                   #   and the per-model popup)
 
 tests/                            # mirrors app/ 1:1 (unit + gui + integration)
 ```
@@ -449,8 +481,20 @@ tests/                            # mirrors app/ 1:1 (unit + gui + integration)
     above the **Interrupted downloads** rows — every resumable `.part`,
     models *and* half-downloaded backend archives, each with Resume / Discard.
     The library and its downloads are one subject, so they share one tab.
+    *Server options…* on the selected model opens the per-model **popup**
+    (`dialogs/model_server_options.py`): a *Use global server config* checkbox
+    (checked by default, and for every model that has no options of its own),
+    the shared editor, and *Reset server config* / *Save*. Checked, the rows
+    show the global values read-only — what the model would run with — and
+    saving drops its own entry; unchecked, it edits and stores that model's own
+    configuration, and the globals are left alone.
   - *Server options* is a searchable, sectioned editor generated from the
-    `serverargs` catalogue, with a live command-line preview.
+    `serverargs` catalogue, with a live command-line preview. Its **scope**
+    selector is *Global defaults* (what a model follows unless it has options of
+    its own) or one model (that model's own configuration); a model scope greys
+    out `--host` / `--port` / the raw extra args (they stay global) and marks
+    the preview with the model it belongs to. Both hosts share one editor
+    widget, `widgets/server_options_editor.py`.
   - *Settings* is a scrolling page of grouped cards — **Locations** (managed
     root, backend location, models directory, settings file), **Server** (host,
     port, default backend, OS `llama-server`, CUDA runtime, *Validate

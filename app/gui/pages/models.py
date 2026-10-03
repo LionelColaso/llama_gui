@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from ..sections.downloads import DownloadsSection
@@ -20,6 +21,10 @@ from ..sections.models import ModelsSection
 class ModelsPage(QScrollArea):
     """Single scrolling page with the Models library / Downloads sections."""
 
+    #: Forwarded from the Models section: a model name whose server options the
+    #: user wants to edit (see the *Server options…* button).
+    server_options_requested = Signal(str)
+
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("ModelsPage")
@@ -28,6 +33,7 @@ class ModelsPage(QScrollArea):
 
         self.models = ModelsSection(orch)
         self.downloads = DownloadsSection(orch)
+        self.models.server_options_requested.connect(self.server_options_requested.emit)
 
         content = QWidget()
         content.setObjectName("ModelsPageContent")

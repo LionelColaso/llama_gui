@@ -1,11 +1,10 @@
-"""Shared download-action slots for the Downloads page and Models section.
+"""Shared download-action slots for the Models and Downloads sections.
 
 Both drive long-running model downloads through the same worker-pool +
 progress-widget machinery, so the launch wiring (``EngineWorker`` construction,
 signal connections) and the progress / error slots live here to keep the host
 code focused on layout instead of duplicating the same handful of lines. It sits
-at the ``gui/`` root because its two consumers are a page and a dashboard
-section.
+at the ``gui/`` root because both its consumers are sections of the Models tab.
 
 The host class is expected to provide:
 
@@ -18,13 +17,37 @@ The host class is expected to provide:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ..download import DownloadControl
 from .widgets.progress_bar import ProgressWidget
 from .worker_pool import EngineWorker, WorkerPool
+
+
+def add_list_footer(
+    layout: QVBoxLayout,
+    on_refresh: Callable[[], None],
+    tooltip: str,
+) -> QLabel:
+    """Append the Refresh row and status label every list section ends with.
+
+    Returns the status label so the host can assign it to ``self._status_label``.
+    """
+    btn_row = QHBoxLayout()
+    refresh_btn = QPushButton("Refresh")
+    refresh_btn.setToolTip(tooltip)
+    refresh_btn.clicked.connect(on_refresh)
+    btn_row.addWidget(refresh_btn)
+    btn_row.addStretch()
+    layout.addLayout(btn_row)
+
+    status_label = QLabel()
+    status_label.setWordWrap(True)
+    layout.addWidget(status_label)
+    return status_label
 
 
 class DownloadActionsMixin:

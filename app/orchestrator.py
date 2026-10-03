@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
@@ -35,11 +35,16 @@ from .download import (
     pending_downloads as _scan_pending_downloads,
 )
 from .lifecycle import (
+    GLOBAL_ONLY_DEDICATED,
     build_llama_server_args,
+    dedicated_value_text,
     launch_llama_server,
+    launch_settings,
+    model_server_options,
     read_log_tail,
     running_pids,
     stop_processes,
+    uses_global_server_config,
 )
 from .links import link_current, remove_link
 from .locking import mutation_lock
@@ -83,6 +88,7 @@ from .schemas import (
 from .serverargs import (
     DEDICATED_FLAGS,
     SERVER_ARGS,
+    ServerArg,
     find_arg,
     validate_options,
     validate_value,
@@ -770,16 +776,26 @@ class Orchestrator:
 
     # ─── Server arguments ────────────────────────────────────────────────
 
-    def describe_server_args(self, flag: str | None = None) -> dict[str, Any]:
-        """The full options catalogue with the currently configured values."""
+    def describe_server_args(
+        self, flag: str | None = None, model: str | None = None
+    ) -> dict[str, Any]:
+        """The full options catalogue with the values that apply.
+
+        With no ``model`` this is the global configuration every model follows
+        unless it has its own; with one it is that model's configuration, and
+        ``mode`` says whether it follows the globals (``global``) or runs on
+        its own values (``own``).
+        """
+        options = model_server_options(self.cfg, model)
+        own = model is not None and not uses_global_server_config(self.cfg, model)
         rows: list[dict[str, Any]] = []
         for arg in SERVER_ARGS:
             if flag and arg.flag != flag and flag not in arg.aliases:
                 continue
             value = (
-                self._dedicated_value(arg.flag)
+                self._dedicated_value(arg.flag, model)
                 if arg.flag in DEDICATED_FLAGS
-                else self.cfg.server_options.get(arg.flag, "")
+                else str(options.get(arg.flag, ""))
             )
             rows.append(
                 {
@@ -797,12 +813,28 @@ class Orchestrator:
                     "deprecated": arg.deprecated,
                     "help": arg.help,
                     "value": value,
+                    # In a model scope, whether this value is the global default
+                    # (the model follows it) or the model's own setting.
+                    "inherited": not own,
                 }
             )
-        return {"args": rows, "count": len(rows)}
+        return {
+            "args": rows,
+            "count": len(rows),
+            "scope": "model" if model else "global",
+            "mode": "own" if own else "global",
+            "model": model or "",
+        }
 
-    def set_server_arg(self, flag: str, value: str) -> dict[str, Any]:
-        """Set one option ('' or 'default' resets it). Returns the option row."""
+    def set_server_arg(
+        self, flag: str, value: str, model: str | None = None
+    ) -> dict[str, Any]:
+        """Set one option ('' or 'default' resets it). Returns the option row.
+
+        With ``model`` the value lands in that model's own configuration, which
+        is created (seeded from the globals, so setting one option is a minimal
+        change rather than a wipe) the first time it is used.
+        """
         arg = find_arg(flag)
         if arg is None:
             raise EngineError(
@@ -816,40 +848,149 @@ class Orchestrator:
                 "it cannot be passed to a running server.",
             )
         canon = arg.flag
-        if canon in DEDICATED_FLAGS:
-            self.save_config(self._dedicated_values_for_set(canon, value))
-        else:
+        if model:
+            self._reject_global_only(canon)
+            options = self._model_options_for_edit(model)
             try:
                 normalized = validate_value(arg, value)
             except ValueError as e:
-                # The CLI/GUI contract is EngineError with a documented exit
-                # code; a bare ValueError would surface as UNEXPECTED_ERROR
-                # and read like an engine failure rather than bad input.
                 raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
-            options = dict(self.cfg.server_options)
             if normalized:
                 options[canon] = normalized
             else:
                 options.pop(canon, None)
-            self.save_config({"server_options": options})
-        return self.describe_server_args(canon)
+            self._write_model_server_options(model, options)
+        elif canon in DEDICATED_FLAGS:
+            self.save_config(self._dedicated_values_for_set(canon, value))
+        else:
+            self._set_global_server_arg(canon, arg, value)
+        return self.describe_server_args(canon, model)
 
-    def clear_server_args(self) -> dict[str, Any]:
-        """Reset every catalogue option to its default ('' / omitted)."""
-        self.save_config({"server_options": {}})
-        return self.describe_server_args()
+    def _set_global_server_arg(self, flag: str, arg: ServerArg, value: str) -> None:
+        """Write one catalogue option into the global configuration."""
+        try:
+            normalized = validate_value(arg, value)
+        except ValueError as e:
+            # The CLI/GUI contract is EngineError with a documented exit
+            # code; a bare ValueError would surface as UNEXPECTED_ERROR
+            # and read like an engine failure rather than bad input.
+            raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
+        options = dict(self.cfg.server_options)
+        if normalized:
+            options[flag] = normalized
+        else:
+            options.pop(flag, None)
+        self.save_config({"server_options": options})
+
+    def _reject_global_only(self, flag: str) -> None:
+        """Refuse a per-model ``--host``/``--port``: it would be dead config."""
+        if flag in GLOBAL_ONLY_DEDICATED:
+            raise EngineError(
+                ExitCode.BAD_ARGUMENT,
+                f"{flag} cannot be set per model: the app probes one "
+                "host/port for health, status and stop. Set it globally.",
+            )
+
+    def _model_options_for_edit(self, model: str) -> dict[str, str]:
+        """The model's own options, seeded from the globals the first time.
+
+        Seeding (rather than starting empty) means setting a single option for a
+        model changes exactly that option: the model keeps the behaviour it had
+        as far as everything else goes.
+        """
+        entry = self.cfg.model_server_options.get(model)
+        if entry is not None:
+            return dict(entry)
+        return dict(self.cfg.server_options)
+
+    def _write_model_server_options(
+        self, model: str, options: Mapping[str, str]
+    ) -> None:
+        """Persist one model's own options, leaving every other model alone."""
+        merged = {
+            name: dict(entry)
+            for name, entry in self.cfg.model_server_options.items()
+            if name != model
+        }
+        merged[model] = dict(options)
+        self.save_config({"model_server_options": merged})
+
+    def save_model_server_config(
+        self, model: str, options: Mapping[str, str]
+    ) -> dict[str, Any]:
+        """Replace one model's own server configuration (the popup's *Save*).
+
+        An empty ``options`` is a valid, meaningful state: the model asked for
+        its own settings with everything at the default. Validated exactly like
+        the global scope, so nothing bad reaches the launch path.
+        """
+        cleaned: dict[str, str] = {}
+        for flag, value in options.items():
+            arg = find_arg(flag)
+            if arg is None:
+                raise EngineError(
+                    ExitCode.BAD_ARGUMENT,
+                    f"Unknown option '{flag}'. List them with 'server-args'.",
+                )
+            self._reject_global_only(arg.flag)
+            try:
+                normalized = validate_value(arg, str(value))
+            except ValueError as e:
+                raise EngineError(ExitCode.BAD_ARGUMENT, str(e)) from e
+            if normalized:
+                cleaned[arg.flag] = normalized
+        self._write_model_server_options(model, cleaned)
+        return self.describe_server_args(None, model)
+
+    def reset_model_server_config(self, model: str) -> dict[str, Any]:
+        """Put one model back on the global configuration.
+
+        The model keeps no own entry, so it follows the globals again — and it
+        follows their *later* edits too, which is the whole point of the mode.
+        """
+        merged = {
+            name: dict(entry)
+            for name, entry in self.cfg.model_server_options.items()
+            if name != model
+        }
+        self.save_config({"model_server_options": merged})
+        return self.describe_server_args(None, model)
+
+    def clear_server_args(
+        self, model: str | None = None, use_global: bool = False
+    ) -> dict[str, Any]:
+        """Reset every catalogue option to its default ('' / omitted).
+
+        With ``model`` this is the popup's *Reset server config*: the model gets
+        its own configuration with everything at the default, deliberately *not*
+        the globals — those may be edited later, and a reset must not silently
+        start following them. Pass ``use_global=True`` to go back to following
+        them instead.
+        """
+        if not model:
+            self.save_config({"server_options": {}})
+            return self.describe_server_args()
+        if use_global:
+            return self.reset_model_server_config(model)
+        self._write_model_server_options(model, {})
+        return self.describe_server_args(None, model)
 
     def _server_args_for(self, exe_path: str, model_path: str) -> list[str]:
-        """Build the llama-server command line from the current config."""
+        """Build the llama-server command line from the current config.
+
+        The model name picks its configuration: the globals, or its own values
+        when it has them.
+        """
+        settings = launch_settings(self.cfg, Path(model_path).name)
         return build_llama_server_args(
             exe_path=exe_path,
             model_path=model_path,
-            host=self.cfg.host,
-            port=self.cfg.port,
-            ctx_size=self.cfg.ctx_size,
-            n_gpu_layers=self.cfg.n_gpu_layers,
-            extra_args=self.cfg.extra_server_args,
-            server_options=self.cfg.server_options,
+            host=settings.host,
+            port=settings.port,
+            ctx_size=settings.ctx_size,
+            n_gpu_layers=settings.n_gpu_layers,
+            extra_args=settings.extra_args,
+            server_options=settings.options,
         )
 
     def preview_command(self) -> list[str]:
@@ -862,16 +1003,22 @@ class Orchestrator:
             model = "<model>"
         return self._server_args_for(exe, model)
 
-    def _dedicated_value(self, flag: str) -> str:
-        """The current string value of a dedicated (non-catalogue) flag."""
+    def _dedicated_value(self, flag: str, model: str | None = None) -> str:
+        """The current string value of a dedicated (non-catalogue) flag.
+
+        ``host``/``port`` are always global; ``ctx-size``/``n-gpu-layers`` show
+        the model's override when it has one, else the global default.
+        """
         if flag == "--host":
             return self.cfg.host
         if flag == "--port":
             return str(self.cfg.port)
         if flag == "--ctx-size":
-            return str(self.cfg.ctx_size) if self.cfg.ctx_size > 0 else ""
+            value = launch_settings(self.cfg, model).ctx_size
+            return dedicated_value_text(flag, value)
         if flag == "--n-gpu-layers":
-            return str(self.cfg.n_gpu_layers)
+            value = launch_settings(self.cfg, model).n_gpu_layers
+            return dedicated_value_text(flag, value)
         return ""
 
     def _dedicated_values_for_set(self, flag: str, value: str) -> dict[str, Any]:

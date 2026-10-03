@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...download import resumable_tasks
-from ..download_actions import DownloadActionsMixin
+from ..download_actions import DownloadActionsMixin, add_list_footer
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.model_table import ModelTable
@@ -38,6 +39,10 @@ def _ignore_error(msg: str) -> None:
 
 
 class ModelsSection(DownloadActionsMixin, QWidget):
+    #: Emitted with a model name when the user asks to edit that model's server
+    #: options; the window forwards it to the per-model popup.
+    server_options_requested = Signal(str)
+
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orch = orch
@@ -70,17 +75,25 @@ class ModelsSection(DownloadActionsMixin, QWidget):
             ("Set active", self._do_set_active),
             ("Remove", self._do_remove),
             ("Open folder", self._open_folder),
-            ("Refresh", self._load),
         ):
             button = QPushButton(label)
             button.clicked.connect(handler)
             btn_row.addWidget(button)
+        # One model's settings are its own decision; this asks for it in a popup.
+        self._server_options_btn = QPushButton("Server options…")
+        self._server_options_btn.setObjectName("GhostButton")
+        self._server_options_btn.setToolTip(
+            "Choose whether this model follows the global server options or "
+            "keeps settings of its own, and edit them."
+        )
+        self._server_options_btn.clicked.connect(self._do_server_options)
+        btn_row.addWidget(self._server_options_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        self._status_label = QLabel()
-        self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
+        self._status_label = add_list_footer(
+            layout, self._load, "Re-list the models in the models directory."
+        )
 
         self._load()
         self._show_server_path()
@@ -215,6 +228,14 @@ class ModelsSection(DownloadActionsMixin, QWidget):
         worker.signals.finished.connect(self._on_list)
         worker.signals.error.connect(self._on_error)
         WorkerPool.instance().start(worker)
+
+    def _do_server_options(self) -> None:
+        """Ask for the selected model's server options."""
+        name = self._table.selected_name()
+        if not name:
+            self._status_label.setText("Select a model in the list first.")
+            return
+        self.server_options_requested.emit(name)
 
     def _open_folder(self) -> None:
         from PySide6.QtCore import QUrl

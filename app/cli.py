@@ -102,6 +102,47 @@ class _Parser(argparse.ArgumentParser):
         sys.exit(ExitCode.BAD_ARGUMENT)
 
 
+#: Actions whose first positional argument is a llama-server flag rather than a
+#: name, so a leading ``-`` on that token means "value", not "option of mine".
+_FLAG_POSITIONAL_ACTIONS = ("set-arg",)
+
+#: Options ``set-arg`` really does own (so they stay options, not positionals).
+_SET_ARG_OPTIONS = frozenset({"-h", "--help", "--json", "--model"})
+
+#: Marker wrapped around a flag positional so argparse cannot mistake it for an
+#: option; stripped again in :func:`_decode_flag_positional`.
+_FLAG_TOKEN_PREFIX = "\x00llamagui-flag:"
+
+
+def _encode_flag_positional(argv: list[str]) -> list[str]:
+    """Make ``set-arg --top-k 40`` parse as ``flag="--top-k", value="40"``.
+
+    argparse reads ``--top-k`` as an option of the ``set-arg`` sub-parser and
+    rejects it as unknown, which made the documented ``set-arg <flag> [value]``
+    form unusable for every real flag (``-t`` included). Hiding the dash from
+    argparse and restoring it afterwards keeps the trailing options (``--json``,
+    ``--model``) working, which a bare ``--`` separator would not.
+    """
+    out: list[str] = []
+    armed = False
+    for token in argv:
+        if token in _FLAG_POSITIONAL_ACTIONS:
+            armed = True
+        elif armed and token.startswith("-") and token not in _SET_ARG_OPTIONS:
+            out.append(_FLAG_TOKEN_PREFIX + token)
+            armed = False
+            continue
+        out.append(token)
+    return out
+
+
+def _decode_flag_positional(args: argparse.Namespace) -> None:
+    """Undo :func:`_encode_flag_positional` on the parsed ``flag``."""
+    value = getattr(args, "flag", None)
+    if isinstance(value, str) and value.startswith(_FLAG_TOKEN_PREFIX):
+        args.flag = value.removeprefix(_FLAG_TOKEN_PREFIX)
+
+
 def _build_parser(use_json: bool = False) -> _Parser:
     parser = _Parser(
         prog="llamagui",
@@ -117,6 +158,19 @@ def _build_parser(use_json: bool = False) -> _Parser:
         # Accept --json before or after the sub-command.
         child.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
         return child
+
+    def _add_model_scope(child: argparse.ArgumentParser) -> None:
+        """``--model`` picks one model's own scope instead of the global one."""
+        child.add_argument(
+            "--model",
+            default=None,
+            metavar="NAME",
+            help=(
+                "Scope to one model (.gguf file name): read or write that model's "
+                "own server options. Without it the global options are used, "
+                "which is what every model follows until it has options of its own"
+            ),
+        )
 
     add("describe", "Show backends, actions and platform defaults")
     add("status", "Show current status (fast, no subprocesses)")
@@ -176,14 +230,30 @@ def _build_parser(use_json: bool = False) -> _Parser:
         "server-args", "List every llama-server option with its current value"
     )
     server_args_p.add_argument("--flag", default=None, help="Only one option")
+    _add_model_scope(server_args_p)
 
     set_arg_p = add(
         "set-arg", "Set one llama-server option (empty value resets it to default)"
     )
     set_arg_p.add_argument("flag", help="Flag or alias, e.g. --top-k or -t")
     set_arg_p.add_argument("value", nargs="?", default="")
+    _add_model_scope(set_arg_p)
 
-    add("clear-args", "Reset every llama-server option to its default")
+    clear_args_p = add(
+        "clear-args",
+        "Reset every llama-server option to its default "
+        "(--model NAME clears one model's options, --use-global hands it "
+        "the globals instead)",
+    )
+    _add_model_scope(clear_args_p)
+    clear_args_p.add_argument(
+        "--use-global",
+        action="store_true",
+        help=(
+            "With --model: drop that model's own options entirely, so it follows "
+            "the global options again (and their later edits)"
+        ),
+    )
 
     add("gui", "Launch the desktop app")
     return parser
@@ -224,11 +294,11 @@ def _dispatch(orch: Orchestrator, args: argparse.Namespace) -> Any:
     if action == "discard-download":
         return orch.discard_download(args.dest)
     if action == "server-args":
-        return orch.describe_server_args(args.flag)
+        return orch.describe_server_args(args.flag, args.model)
     if action == "set-arg":
-        return orch.set_server_arg(args.flag, args.value)
+        return orch.set_server_arg(args.flag, args.value, args.model)
     if action == "clear-args":
-        return orch.clear_server_args()
+        return orch.clear_server_args(args.model, args.use_global)
     raise EngineError(ExitCode.BAD_ARGUMENT, f"Unknown action: {action}")
 
 
@@ -267,7 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     use_json = "--json" in argv
     # The parser needs the same decision, so an argument error still emits the
     # documented JSON envelope rather than a human message.
-    args = _build_parser(use_json=use_json).parse_args(argv)
+    args = _build_parser(use_json=use_json).parse_args(_encode_flag_positional(argv))
+    _decode_flag_positional(args)
 
     if args.action == "gui":
         from .gui.bootstrap import run as run_gui

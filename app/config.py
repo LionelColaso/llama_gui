@@ -80,6 +80,22 @@ class AppConfig:
     server_options: dict[str, str] = field(
         default_factory=lambda: cast("dict[str, str]", {})
     )
+    #: Per-model server settings, keyed by model file name:
+    #: ``{"qwen3-8b.gguf": {"--ctx-size": "16384", "--flash-attn": "on"}}``.
+    #:
+    #: **Presence is the mode.** A model with *no* entry follows the global
+    #: defaults (:attr:`server_options` plus the dedicated ``ctx_size`` /
+    #: ``n_gpu_layers`` fields); a model *with* an entry runs on its own values
+    #: alone, where a blank/absent flag means "let the binary decide". That is
+    #: why an empty entry ``{}`` is meaningful -- it is the model that asked for
+    #: defaults and opted out of the globals -- so it is kept on load
+    #: (:func:`_clean_model_server_options`). ``--host`` and ``--port`` are
+    #: deliberately never stored here: the app probes exactly one host:port for
+    #: health, status and stop, so it cannot differ per model (see
+    #: :func:`app.lifecycle.launch_settings` for the merge).
+    model_server_options: dict[str, dict[str, str]] = field(
+        default_factory=lambda: cast("dict[str, dict[str, str]]", {})
+    )
     #: When True, prefer a ``llama-server`` found on ``PATH`` (the OS
     #: install) over the downloaded backend in the backend location.
     use_os_llama_server: bool = False
@@ -184,6 +200,7 @@ class AppConfig:
             "n_gpu_layers",
             "extra_server_args",
             "server_options",
+            "model_server_options",
             "bundle_cuda_runtime",
             "auto_update",
             "auto_update_interval_hours",
@@ -237,6 +254,9 @@ class AppConfig:
             ),
             extra_server_args=_clean_str(data.get("extra_server_args")) or "",
             server_options=_clean_server_options(data.get("server_options")),
+            model_server_options=_clean_model_server_options(
+                data.get("model_server_options")
+            ),
             bundle_cuda_runtime=_coerce_choice(
                 data.get("bundle_cuda_runtime"), CUDA_RUNTIME_MODES, "auto"
             ),
@@ -298,6 +318,10 @@ class AppConfig:
                 "n_gpu_layers": self.n_gpu_layers,
                 "extra_server_args": self.extra_server_args,
                 "server_options": dict(self.server_options),
+                "model_server_options": {
+                    model: dict(options)
+                    for model, options in self.model_server_options.items()
+                },
                 "bundle_cuda_runtime": self.bundle_cuda_runtime,
                 "auto_update": self.auto_update,
                 "auto_update_interval_hours": self.auto_update_interval_hours,
@@ -393,6 +417,33 @@ def _clean_server_options(value: Any) -> dict[str, str]:
     for key, item in raw.items():
         if key.startswith("-") and isinstance(item, str):
             cleaned[key] = item
+    return cleaned
+
+
+def _clean_model_server_options(value: Any) -> dict[str, dict[str, str]]:
+    """Keep only ``{model name: {flag: value}}`` pairs from a loaded file.
+
+    Same shape rule as :func:`_clean_server_options`, one level deeper, so a
+    hand-edited or partially corrupt file cannot inject non-string values into
+    the launch path. An *empty* entry is kept: it is how a model says "my own
+    settings, all default", as opposed to no entry at all, which means "follow
+    the global defaults" (see :attr:`AppConfig.model_server_options`).
+
+    An entry that had flags but kept none of them is dropped instead: its values
+    were junk, so keeping the husk would silently move that model off the
+    globals on the strength of a corrupt file.
+    """
+    if not isinstance(value, dict):
+        return {}
+    raw = cast("dict[str, Any]", value)
+    cleaned: dict[str, dict[str, str]] = {}
+    # JSON object keys are always strings, so the model name needs no coercion.
+    for model, options in raw.items():
+        if not model or not isinstance(options, dict):
+            continue
+        entry = _clean_server_options(options)
+        if entry or not options:
+            cleaned[model] = entry
     return cleaned
 
 

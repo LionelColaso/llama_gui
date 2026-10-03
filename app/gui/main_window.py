@@ -18,6 +18,7 @@ from ..config import AppConfig
 from ..orchestrator import Orchestrator
 from ..schemas import InstallData
 from .dialogs.first_run import FirstRunDialog
+from .dialogs.model_server_options import ModelServerOptionsDialog
 from .pages.dashboard import DashboardHome
 from .pages.logs import LogsPage
 from .pages.models import ModelsPage
@@ -29,6 +30,10 @@ from .worker_pool import EngineWorker, WorkerPool
 #: because closeEvent runs on the GUI thread: a stubborn process is force-killed
 #: once this elapses, so a normal shutdown never stalls the event loop.
 SHUTDOWN_GRACE_SECONDS = 0.5
+
+#: Sidebar order; the QStackedWidget below is built in exactly this order, so
+#: ``_PAGES.index(name)`` is the row that shows that page.
+_PAGES = ("Dashboard", "Models", "Server options", "Logs", "Settings")
 
 
 class MainWindow(QWidget):
@@ -46,9 +51,7 @@ class MainWindow(QWidget):
 
         self._nav = QListWidget()
         self._nav.setObjectName("Sidebar")
-        self._nav.addItems(
-            ["Dashboard", "Models", "Server options", "Logs", "Settings"]
-        )
+        self._nav.addItems(list(_PAGES))
         self._nav.currentRowChanged.connect(self._switch_page)
 
         sidebar = QWidget()
@@ -80,6 +83,7 @@ class MainWindow(QWidget):
         self._settings = SettingsPage(self._orch)
         # The library and its downloads are one tab: Models + Downloads.
         self._models = ModelsPage(self._orch)
+        self._models.server_options_requested.connect(self._show_model_server_options)
 
         for page in (
             self._dashboard,
@@ -165,6 +169,19 @@ class MainWindow(QWidget):
         self._pages.setCurrentIndex(index)
         if index == 0:
             self._dashboard.start_refresh()
+
+    def _show_model_server_options(self, model: str) -> None:
+        """Open the per-model server-options popup for ``model``.
+
+        The model chooses there between following the global server options and
+        keeping its own; the *Server options* page stays the home of the global
+        defaults, and the popup keeps the two decisions in one place.
+        """
+        dialog = ModelServerOptionsDialog(self._orch, model, self)
+        if dialog.exec():
+            # The model may now have its own configuration (or none), which the
+            # page's scope selector and its preview both depend on.
+            self._server_args.set_scope(dialog.model)
 
     def _auto_update(self) -> None:
         worker = EngineWorker(self._orch, "update", progress_callback=None)

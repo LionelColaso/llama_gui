@@ -306,7 +306,74 @@ def test_ctx_size_zero_still_means_auto(tmp_path: Path) -> None:
     assert loaded.ctx_size == 0
     assert loaded.load_warnings == []
 
+
+def test_model_server_options_round_trip(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "model_server_options": {
+                    "big.gguf": {"--ctx-size": "16384", "--flash-attn": "on"}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.model_server_options == {
+        "big.gguf": {"--ctx-size": "16384", "--flash-attn": "on"}
+    }
+    saved = AppConfig.from_dict(loaded.to_dict())
+    assert saved.model_server_options == loaded.model_server_options
+
+
+def test_model_server_options_survive_a_save(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg = AppConfig(
+        root=str(tmp_path / "root"),
+        model_server_options={"big.gguf": {"--ctx-size": "16384"}},
+    )
+    cfg.save(cfg_path)
+
+    assert AppConfig.load(cfg_path).model_server_options == {
+        "big.gguf": {"--ctx-size": "16384"}
+    }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not-a-dict",
+        {"big.gguf": "nope"},
+        {"": {"--ctx-size": "4096"}},
+        {"big.gguf": {"--ctx-size": 4096}},  # a non-string value
+        {"big.gguf": {"ctx-size": "4096"}},  # not a flag
+    ],
+)
+def test_model_server_options_drop_junk(raw: object, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"model_server_options": raw}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.model_server_options == {}
+
     assert loaded.root
+
+
+def test_an_empty_model_entry_is_kept(tmp_path: Path) -> None:
+    """``{}`` is a real state — "this model has settings, all default"."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps({"model_server_options": {"big.gguf": {}}}),
+        encoding="utf-8",
+    )
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.model_server_options == {"big.gguf": {}}
+
+    saved = AppConfig.from_dict(loaded.to_dict())
+    assert saved.model_server_options == {"big.gguf": {}}
 
 
 def test_config_path_default_location(

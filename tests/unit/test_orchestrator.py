@@ -15,7 +15,7 @@ from app.config import AppConfig, config_file
 from app.locking import LockAcquisitionError, mutation_lock
 from app.orchestrator import Orchestrator
 from app.resolver import ResolvedBinary
-from app.schemas import EngineError, InstallResultItem
+from app.schemas import EngineError, ExitCode, InstallResultItem
 from app.state import read_junction_target
 
 _SYSTEM = _platform.system().lower()
@@ -925,6 +925,154 @@ def test_set_dedicated_ctx_size_updates_the_config_field(tmp_path: Path) -> None
     orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
     orch.set_server_arg("--ctx-size", "16384")
     assert orch.cfg.ctx_size == 16384
+
+
+def _two_models(tmp_path: Path) -> Orchestrator:
+    """An orchestrator where two models have their own context size."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+    orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+    orch.set_server_arg("--ctx-size", "2048", model="small.gguf")
+    return orch
+
+
+class TestModelScopedServerArgs:
+    """A model either follows the global defaults or owns its own values."""
+
+    def test_an_own_config_leaves_the_global_default_alone(
+        self, tmp_path: Path
+    ) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        assert orch.cfg.model_server_options == {"big.gguf": {"--ctx-size": "16384"}}
+        assert orch.cfg.ctx_size == 4096, "the global default must not move"
+
+    def test_the_model_scope_is_reported_back(self, tmp_path: Path) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        result = orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        assert result["scope"] == "model"
+        assert result["model"] == "big.gguf"
+        assert result["mode"] == "own"
+        assert result["args"][0]["value"] == "16384"
+        assert result["args"][0]["inherited"] is False
+
+    def test_describe_defaults_to_the_global_scope(self, tmp_path: Path) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        result = orch.describe_server_args("--ctx-size")
+        assert result["scope"] == "global"
+        assert result["args"][0]["value"] == "4096"
+
+    def test_a_model_without_a_config_reports_the_global_mode(
+        self, tmp_path: Path
+    ) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        result = orch.describe_server_args("--ctx-size", "small.gguf")
+        assert result["mode"] == "global"
+        assert result["args"][0]["value"] == "4096"
+        assert result["args"][0]["inherited"] is True
+
+    def test_a_model_with_its_own_config_ignores_the_globals(
+        self, tmp_path: Path
+    ) -> None:
+        """Its values alone decide; a flag it omits is the binary's default."""
+        orch = Orchestrator(
+            AppConfig(
+                root=str(tmp_path), ctx_size=4096, server_options={"--jinja": "on"}
+            )
+        )
+        orch.save_model_server_config("big.gguf", {"--flash-attn": "on"})
+        row = orch.describe_server_args("--jinja", "big.gguf")["args"][0]
+        assert row["value"] == ""
+        assert row["inherited"] is False
+
+    def test_the_launch_line_carries_the_models_context(self, tmp_path: Path) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        cmd = orch._server_args_for("llama-server", str(tmp_path / "big.gguf"))
+        assert cmd[cmd.index("-c") + 1] == "16384"
+
+    def test_another_model_launches_with_the_global_context(
+        self, tmp_path: Path
+    ) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        cmd = orch._server_args_for("llama-server", str(tmp_path / "small.gguf"))
+        assert cmd[cmd.index("-c") + 1] == "4096"
+
+    def test_clearing_a_value_leaves_the_own_config_at_the_defaults(
+        self, tmp_path: Path
+    ) -> None:
+        """An emptied flag is 'not set' — the model keeps its own config."""
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        orch.set_server_arg("--ctx-size", "", model="big.gguf")
+        assert orch.cfg.model_server_options == {"big.gguf": {}}
+
+    def test_clearing_a_model_writes_empty_values_not_the_globals(
+        self, tmp_path: Path
+    ) -> None:
+        orch = _two_models(tmp_path)
+
+        orch.clear_server_args("big.gguf")
+
+        assert orch.cfg.model_server_options == {
+            "small.gguf": {"--ctx-size": "2048"},
+            "big.gguf": {},
+        }
+        assert orch.cfg.ctx_size == 4096
+
+    def test_clearing_globally_keeps_the_model_configs(self, tmp_path: Path) -> None:
+        orch = Orchestrator(
+            AppConfig(root=str(tmp_path), server_options={"--jinja": "on"})
+        )
+        orch.set_server_arg("--ctx-size", "16384", model="big.gguf")
+        orch.clear_server_args()
+        assert orch.cfg.server_options == {}
+        assert "--ctx-size" in orch.cfg.model_server_options["big.gguf"]
+
+    def test_resetting_a_model_hands_it_back_to_the_globals(
+        self, tmp_path: Path
+    ) -> None:
+        orch = _two_models(tmp_path)
+
+        orch.reset_model_server_config("big.gguf")
+
+        assert orch.cfg.model_server_options == {"small.gguf": {"--ctx-size": "2048"}}
+        assert orch.describe_server_args("--ctx-size", "big.gguf")["mode"] == "global"
+
+    def test_saving_an_empty_config_keeps_the_model_on_its_own(
+        self, tmp_path: Path
+    ) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path), ctx_size=4096))
+
+        orch.save_model_server_config("big.gguf", {})
+
+        assert orch.cfg.model_server_options == {"big.gguf": {}}
+        assert orch.describe_server_args(None, "big.gguf")["mode"] == "own"
+        cmd = orch._server_args_for("llama-server", str(tmp_path / "big.gguf"))
+        assert "-c" not in cmd
+
+    def test_the_port_cannot_be_moved_to_one_model(self, tmp_path: Path) -> None:
+        """The app probes one host:port for health, status and stop."""
+        orch = Orchestrator(AppConfig(root=str(tmp_path), port=8080))
+        with pytest.raises(EngineError) as excinfo:
+            orch.set_server_arg("--port", "9999", model="big.gguf")
+        assert excinfo.value.exit_code == ExitCode.BAD_ARGUMENT
+        assert orch.cfg.port == 8080
+
+        with pytest.raises(EngineError):
+            orch.save_model_server_config("big.gguf", {"--port": "9999"})
+        assert orch.cfg.model_server_options == {}
+
+    def test_a_bad_value_is_rejected_before_it_is_stored(self, tmp_path: Path) -> None:
+        orch = Orchestrator(AppConfig(root=str(tmp_path)))
+        with pytest.raises(EngineError):
+            orch.set_server_arg("--ctx-size", "huge", model="big.gguf")
+        assert orch.cfg.model_server_options == {}
+
+        with pytest.raises(EngineError):
+            orch.save_model_server_config("big.gguf", {"--ctx-size": "huge"})
+        assert orch.cfg.model_server_options == {}
 
 
 def test_dedicated_values_are_not_stored_in_server_options(tmp_path: Path) -> None:

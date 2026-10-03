@@ -22,6 +22,7 @@ llama_gui/
 │   │   ├── dialogs/
 │   │   │   ├── __init__.py
 │   │   │   ├── first_run.py
+│   │   │   ├── model_server_options.py
 │   │   │   └── relocate.py
 │   │   ├── pages/
 │   │   │   ├── __init__.py
@@ -42,6 +43,7 @@ llama_gui/
 │   │   │   ├── model_table.py
 │   │   │   ├── path_picker.py
 │   │   │   ├── progress_bar.py
+│   │   │   ├── server_options_editor.py
 │   │   │   └── source_badge.py
 │   │   ├── __init__.py
 │   │   ├── bootstrap.py
@@ -92,11 +94,13 @@ llama_gui/
 │   │   ├── test_dashboard.py
 │   │   ├── test_first_run.py
 │   │   ├── test_main_window.py
+│   │   ├── test_model_server_options_dialog.py
 │   │   ├── test_model_table.py
 │   │   ├── test_models_page.py
 │   │   ├── test_models_section.py
 │   │   ├── test_progress_widget.py
 │   │   ├── test_relocate_dialog.py
+│   │   ├── test_server_args_page.py
 │   │   ├── test_settings_page.py
 │   │   ├── test_token.py
 │   │   └── test_worker_progress_threading.py
