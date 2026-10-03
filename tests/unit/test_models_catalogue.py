@@ -36,8 +36,8 @@ def test_backend_table_lists_every_backend() -> None:
 
 def test_asset_patterns_differ_per_platform() -> None:
     backend = BACKEND_BY_NAME["vulkan"]
-    win = backend.asset_pattern("win32")
-    linux = backend.asset_pattern("linux")
+    win = backend.asset_pattern("win32", arch="x64")
+    linux = backend.asset_pattern("linux", arch="x64")
     assert win is not None and linux is not None
     assert win != linux
     assert "vulkan" in win
@@ -48,7 +48,10 @@ def test_asset_patterns_differ_per_platform() -> None:
 def test_asset_pattern_is_valid_regex() -> None:
     import re
 
-    pattern = BACKEND_BY_NAME["cuda12"].asset_pattern("win32")
+    # The arch is pinned rather than left to the host: a pattern carries
+    # ``{arch}``, so building it for the runner's own architecture and then
+    # matching a hardcoded x64 asset name fails on any non-x64 machine.
+    pattern = BACKEND_BY_NAME["cuda12"].asset_pattern("win32", arch="x64")
     assert pattern is not None
     compiled = re.compile(pattern)
     assert compiled.match("llama-12345-bin-win-cuda-12.4-x64.zip")
