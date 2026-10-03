@@ -24,7 +24,6 @@ llama_gui/
 │   │   └── llama-server-help.txt
 │   └── BUILD.md
 ├── junit/
-│   └── test-results.xml
 ├── llamagui/
 │   ├── backends/
 │   │   ├── __init__.py
@@ -58,6 +57,10 @@ llama_gui/
 │   │   ├── theme.py
 │   │   ├── token.py
 │   │   └── worker_pool.py
+│   ├── serverargs/
+│   │   ├── __init__.py
+│   │   ├── _catalogue.py
+│   │   └── _helpers.py
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── applog.py
@@ -71,8 +74,8 @@ llama_gui/
 │   ├── orchestrator.py
 │   ├── paths.py
 │   ├── resolver.py
-│   ├── schemas.py
-│   └── serverargs.py
+│   └── schemas.py
+├── macos-results/
 ├── scripts/
 │   ├── build.py
 │   ├── check.py

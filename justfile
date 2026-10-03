@@ -100,7 +100,6 @@ build-version VERSION: check
 
 # Install all dependencies (including dev)
 dev-setup:
-    uv venv
     uv sync --locked --dev
 
 # Update all dependencies to their latest compatible versions

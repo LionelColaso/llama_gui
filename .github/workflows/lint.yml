@@ -1,13 +1,10 @@
 name: Lint
 
-# Gates are separate, reusable workflows triggered on push and
-# pull_request. This one runs ruff (format + check) and mypy.
+# Lint gate (reusable + manual). Triggered by ci.yml and auto_build.yml as
+# reusable workflows; run directly only via workflow_dispatch.
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
 
 jobs:
   lint:

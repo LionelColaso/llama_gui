@@ -22,6 +22,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -239,8 +240,7 @@ def launch_llama_server(
         log_dir = Path(tempfile.mkdtemp(prefix="llama-server-logs-"))
         out_log = (log_dir / "llama-server.out.log").open("w", encoding="utf-8")
         err_log = (log_dir / "llama-server.err.log").open("w", encoding="utf-8")
-        global _SERVER_LOG_DIR
-        _SERVER_LOG_DIR = log_dir  # pyright: ignore[reportConstantRedefinition]
+        _SERVER_LOG_DIR.dir = log_dir
 
     try:
         proc = subprocess.Popen(
@@ -306,8 +306,8 @@ def read_log_tail(
     if state_dir is None:
         if root is not None:
             state_dir = root / "state"
-        elif _SERVER_LOG_DIR is not None:
-            state_dir = _SERVER_LOG_DIR
+        elif getattr(_SERVER_LOG_DIR, "dir", None) is not None:
+            state_dir = _SERVER_LOG_DIR.dir
     if state_dir is None:
         return []
     # Prefer stderr (diagnostics), but fall back to stdout so a server that only
@@ -512,6 +512,6 @@ __all__ = [
 
 # ─── Module-level state for CLI log recovery ──────────────────────────────
 
-#: Track the last temporary log directory used when ``root=None`` so that
+#: Per-thread temporary log directory used when ``root=None`` so that
 #: ``read_log_tail`` can return captured output in CLI mode.
-_SERVER_LOG_DIR: Path | None = None
+_SERVER_LOG_DIR = threading.local()

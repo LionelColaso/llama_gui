@@ -204,11 +204,11 @@ class MainWindow(QWidget):
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
-            if self.isVisible():
-                self.hide()
-            else:
+            if self.isMinimized() or self.isMaximized() or self.isFullScreen():
                 self.showNormal()
                 self.raise_()
+            else:
+                self.hide()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # Fully tear down so the process actually exits. Closing the window or

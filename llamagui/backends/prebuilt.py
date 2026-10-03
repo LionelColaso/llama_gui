@@ -252,7 +252,7 @@ def _is_readable_archive(path: Path) -> bool:
             with tarfile.open(path, "r:gz") as tf:
                 # getmembers forces the header/index to be read, so a truncated
                 # or corrupt archive fails here rather than mid-extraction.
-                return len(tf.getmembers()) >= 0
+                return len(tf.getmembers()) > 0
     except (OSError, EOFError, tarfile.TarError):
         # A truncated gzip stream surfaces as EOFError from the zlib layer,
         # which is not an OSError or a TarError.

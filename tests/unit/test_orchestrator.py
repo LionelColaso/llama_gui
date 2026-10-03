@@ -6,7 +6,7 @@ import threading
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,7 +14,7 @@ from llamagui.config import AppConfig
 from llamagui.locking import LockAcquisitionError, mutation_lock
 from llamagui.orchestrator import Orchestrator
 from llamagui.resolver import ResolvedBinary
-from llamagui.schemas import EngineError
+from llamagui.schemas import EngineError, InstallResultItem
 
 _SYSTEM = _platform.system().lower()
 _EXE_SUFFIX = ".exe" if _SYSTEM == "windows" else ""
@@ -625,3 +625,68 @@ def test_server_options_reach_the_command_line(tmp_path: Path) -> None:
     orch = Orchestrator(cfg)
     cmd = orch._server_args_for("llama-server", str(tmp_path / "m.gguf"))
     assert "--jinja" in cmd
+
+
+def test_update_skips_when_already_current(tmp_path: Path) -> None:
+    backend = _prebuilt_capable_backend()
+    tag = "b10331"
+    backend_dir = tmp_path / "managed" / backend
+    backend_dir.mkdir(parents=True)
+    (backend_dir / f"llama-server{_EXE_SUFFIX}").write_text("", encoding="utf-8")
+    (backend_dir / ".version").write_text(
+        f"{tag}\nmanaged-prebuilt\n", encoding="utf-8"
+    )
+
+    release: dict[str, Any] = {"tag_name": tag, "assets": []}
+
+    cfg = AppConfig(root=str(tmp_path))
+    orch = Orchestrator(cfg)
+    with (
+        patch("llamagui.backends.prebuilt.latest_release", return_value=release),
+        patch("llamagui.orchestrator.clear_release_cache") as mock_clear,
+    ):
+        result = orch.update([backend], force=False)
+
+    assert result.summary["skipped"] == 1
+    assert result.results[0].status == "skipped"
+    assert result.results[0].version == tag
+    mock_clear.assert_called_once()
+
+
+def _patch_update(
+    backend: str, version: str = "b10331", bytes: int = 0
+) -> tuple[MagicMock, MagicMock]:
+    mock_clear = patch("llamagui.orchestrator.clear_release_cache").start()
+    mock_obtain = patch("llamagui.orchestrator.Orchestrator._obtain_backend").start()
+    mock_obtain.return_value = InstallResultItem(
+        name=backend, status="ok", version=version, bytes=bytes
+    )
+    return mock_clear, mock_obtain
+
+
+def test_update_force_re_downloads(tmp_path: Path) -> None:
+    backend = _prebuilt_capable_backend()
+    cfg = AppConfig(root=str(tmp_path))
+    orch = Orchestrator(cfg)
+    try:
+        mock_clear, _ = _patch_update(backend, version="b10400", bytes=1500)
+        result = orch.update([backend], force=True)
+    finally:
+        patch.stopall()
+
+    mock_clear.assert_called_once()
+    assert result.summary["updated"] == 1
+    assert result.results[0].version == "b10400"
+
+
+def test_update_clears_release_cache(tmp_path: Path) -> None:
+    backend = _prebuilt_capable_backend()
+    cfg = AppConfig(root=str(tmp_path))
+    orch = Orchestrator(cfg)
+    try:
+        mock_clear, _ = _patch_update(backend)
+        orch.update([backend], force=False)
+    finally:
+        patch.stopall()
+
+    mock_clear.assert_called_once()

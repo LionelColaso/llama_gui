@@ -115,15 +115,6 @@ def app_data_dir() -> Path:
         return Path.home() / "Library" / "Application Support" / APP_NAME
     base = _env_dir("XDG_DATA_HOME") or Path.home() / ".local" / "share"
     return base / APP_NAME
-def app_data_dir() -> Path:
-    """Directory holding managed binaries, downloads, state and logs."""
-    if is_windows():
-        base = _env_dir("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
-        return base / APP_NAME
-    if is_macos():
-        return Path.home() / "Library" / "Application Support" / APP_NAME
-    base = _env_dir("XDG_DATA_HOME") or Path.home() / ".local" / "share"
-    return base / APP_NAME
 
 
 def default_root() -> Path:

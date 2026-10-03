@@ -80,7 +80,6 @@ qt_api = "pyside6"
 markers = [
   "integration: needs network or external binaries (skipped by default)",
 ]
-addopts = "-q"
 
 [tool.coverage.run]
 source = ["llamagui"]

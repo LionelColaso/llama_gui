@@ -1,31 +1,38 @@
 name: CI
 
-# Pull-request gate (gates + build run as reusable workflows). The
-# push-to-main pipeline (gates + build + Edge release) lives in auto_build.yml
-# so a push does not double-build. This workflow validates pull requests.
+# Pull-request gate. The push-to-main pipeline (gates + build + Edge release)
+# lives in auto_build.yml so a push does not double-build. This workflow
+# validates pull requests by running the project's canonical check suite.
 on:
   pull_request:
 
 permissions: {}
 
 jobs:
-  lint:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     permissions:
       contents: read
-    uses: ./.github/workflows/lint.yml
+    steps:
+      - uses: actions/checkout@v7
 
-  pyright:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/pyright.yml
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
 
-  pytest:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/pytest.yml
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+
+      - name: Run check suite
+        run: uv run python scripts/check.py
 
   build:
-    needs: [lint, pyright, pytest]
+    needs: check
     permissions:
       id-token: write
       contents: read

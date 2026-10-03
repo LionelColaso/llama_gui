@@ -11,6 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -32,7 +33,7 @@ from ..worker_pool import EngineWorker, WorkerPool
 
 
 def _ignore_error(msg: str) -> None:
-    """Swallow the message; resolve errors are surfaced on the Backends section."""
+    logger.warning("Models page resolve error: {}", msg)
 
 
 class ModelsPage(DownloadActionMixin, QWidget):

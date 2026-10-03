@@ -265,7 +265,7 @@ class Orchestrator:
     def update(
         self,
         backends: list[str] | None = None,
-        force: bool = True,
+        force: bool = False,
     ) -> InstallData:
         # An update is explicitly a request for the *newest* release, so any
         # cached metadata is dropped first: a long-running GUI (auto_update on a

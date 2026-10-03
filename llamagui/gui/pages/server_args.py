@@ -267,11 +267,12 @@ class ServerArgsPage(QWidget):
                     str(self._orch.cfg.ctx_size) if self._orch.cfg.ctx_size > 0 else ""
                 )
             if arg.flag == "--n-gpu-layers":
-                return (
-                    str(self._orch.cfg.n_gpu_layers)
-                    if self._orch.cfg.n_gpu_layers >= 0
-                    else ""
-                )
+                value = self._orch.cfg.n_gpu_layers
+                if value < 0:
+                    return ""
+                if value == 999:
+                    return "all"
+                return str(value)
         return str(self._orch.cfg.server_options.get(arg.flag, ""))
 
     def _set_editor_value(self, editor: QWidget, value: str) -> None:

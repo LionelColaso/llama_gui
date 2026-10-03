@@ -17,6 +17,7 @@ import pytest
 from llamagui.backends.prebuilt import (
     PrebuiltError,
     PrebuiltUnavailable,
+    _is_readable_archive,
     backend_asset_pattern,
     cached_download,
     clear_release_cache,
@@ -741,3 +742,42 @@ def test_progress_callback_defaults_to_none_on_a_fresh_thread() -> None:
         assert result == [True], "a thread-local leaked into a new thread"
     finally:
         set_progress_callback(None)
+
+
+# ─── _is_readable_archive ──────────────────────────────────────────────────
+
+
+def test_is_readable_archive_accepts_a_valid_zip(tmp_path: Path) -> None:
+    archive = tmp_path / "good.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("file.txt", "hello")
+    assert _is_readable_archive(archive) is True
+
+
+def test_is_readable_archive_rejects_a_corrupt_zip(tmp_path: Path) -> None:
+    archive = tmp_path / "corrupt.zip"
+    archive.write_bytes(b"this is not a zip")
+    assert _is_readable_archive(archive) is False
+
+
+def test_is_readable_archive_accepts_a_nonempty_tar_gz(tmp_path: Path) -> None:
+    archive = tmp_path / "good.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        data = b"hello"
+        info = tarfile.TarInfo(name="file.txt")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+    assert _is_readable_archive(archive) is True
+
+
+def test_is_readable_archive_rejects_an_empty_tar_gz(tmp_path: Path) -> None:
+    archive = tmp_path / "empty.tar.gz"
+    with tarfile.open(archive, "w:gz"):
+        pass
+    assert _is_readable_archive(archive) is False
+
+
+def test_is_readable_archive_rejects_a_truncated_tar_gz(tmp_path: Path) -> None:
+    archive = tmp_path / "truncated.tar.gz"
+    archive.write_bytes(b"this is not a valid gzip stream")
+    assert _is_readable_archive(archive) is False

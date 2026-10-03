@@ -98,7 +98,7 @@ class PendingDownloadInfo(BaseModel):
     part: str = ""
     total: int = 0
     done: int = 0
-    percent: float = 0.0
+    percent: int = 0
 
 
 class PendingDownloadsData(BaseModel):
