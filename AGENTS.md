@@ -159,7 +159,9 @@ drivable surface. `contract_version` is `"4"`.
    in `backends/catalogue.py`'s `BACKENDS`, not new control flow.
 3. **Wipe‑then‑extract** a backend dir on (re)install (prevents stale DLLs).
    Deletion is only ever: the temp download scratch, the one backend dir being
-   replaced, or the `managed/current` **link** (never the target's contents).
+   replaced, the `managed/current` **link** (never the target's contents), or
+   the source tree of an accepted relocation (§11), which only runs after every
+   file arrived at the destination.
 4. **Idempotent update:** re-running `install`/`update` when nothing changed
    reports `skipped`, not a redundant download.
 5. **Copy with literal paths**, never a wildcard where a specific file is
@@ -347,6 +349,28 @@ CREATE_NO_WINDOW` + `TerminateProcess`; POSIX `start_new_session` +
   (temp file + `os.replace` + directory fsync); unknown keys round-trip; a
   corrupt file is preserved as `config.corrupt-<ts>.json` rather than
   overwritten. The GitHub token is **never** written to disk (keyring only).
+- **Defaults are absent keys, never frozen paths:** `root` and `models_dir`
+  follow their platform defaults (`default_root()`, `<root>/models`) unless the
+  user overrides them, and a default is stored as a **missing** key
+  (`AppConfig.{root,models_dir}_is_default`) rather than as today's resolved
+  path — otherwise the Settings page's *Use Default* button would pin the value
+  on the next unrelated save. A read (`config`, `status`) still reports the
+  paths in effect. `Orchestrator.reset_root` / `reset_models_dir` drop the
+  override; neither is a CLI action (they are GUI-only by design).
+- **A path change offers the transfer, it does not perform it:** changing `root`
+  and/or `models_dir` leaves the existing data where it is. `Orchestrator.
+  plan_relocation` reports what *would* move (`RelocationData`: `backends` from
+  `<root>/managed`, `models` = `*.gguf`, planned **independently**, so either or
+  both can move in one step) and the Settings page asks via `RelocateDialog`
+  (*Move & save* / *Copy & save* / *Save paths only* / *Cancel*), one checkbox per
+  tree. `relocate_data(transfer="move"|"copy", …)` then runs the ticked trees on a
+  worker thread (never the GUI thread), **before** the config is written, so a
+  failure leaves the settings pointing at the data that is still on disk. Safety:
+  never overwrite a non-empty destination, never follow `managed/current` (it is
+  re-pointed at the new location afterwards, and a copy leaves the old one
+  untouched), keep the user's models directory itself, and hold the mutation lock
+  of **both** roots in a canonical order (`app/relocate.py`, `_relocation_locks`).
+  Like the resets, this is GUI-only and not part of the `ACTIONS` contract.
 
 ---
 
@@ -387,6 +411,7 @@ llama_gui/
 │   ├── download.py                # resumable/pausable/cancellable download engine
 │   ├── paths.py                   # platform paths (root, config_file, exe_suffix)
 │   ├── locking.py                 # named mutex / lockfile for mutations
+│   ├── relocate.py                # move or copy a tree when a path setting changes
 │   ├── backends/catalogue.py      # BACKENDS data table + Source + availability
 │   ├── backends/prebuilt.py       # GitHub release download + cache + .version
 │   └── serverargs/                # llama-server option catalogue (data) + helpers
@@ -398,6 +423,7 @@ llama_gui/
     ├── worker_pool.py             # QRunnable around the engine (never block UI)
     ├── download_actions.py        # download slots shared by a page and a section
     ├── dialogs/first_run.py       # shown when nothing resolves
+    ├── dialogs/relocate.py        # offered when a path change would strand data
     ├── pages/                     # the 5 sidebar pages: dashboard, server_args,
     │                              #   logs, settings, downloads
     ├── sections/                  # dashboard panels: backends, models

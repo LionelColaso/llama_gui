@@ -28,6 +28,7 @@ def _describe_dict() -> dict[str, Any]:
 @pytest.fixture
 def fake_orch() -> MagicMock:
     from app.config import AppConfig
+    from app.schemas import RelocationData
 
     orch = MagicMock()
     d = _describe_dict()
@@ -38,6 +39,10 @@ def fake_orch() -> MagicMock:
     orch.resolve.return_value = MagicMock()
     orch.save_config = MagicMock()
     orch.backend_names.return_value = ["vulkan", "cuda13", "cuda12"]
+    # A real (empty) plan, so the Settings page sees "nothing to move" instead
+    # of a truthy MagicMock attribute and would open the relocation dialog.
+    orch.plan_relocation.return_value = RelocationData()
+    orch.relocate_data.return_value = RelocationData()
     # Provide a real AppConfig so the SettingsPage can bind its form fields.
     orch.cfg = AppConfig(
         root=d["root"],

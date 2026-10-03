@@ -21,7 +21,8 @@ llama_gui/
 │   ├── gui/
 │   │   ├── dialogs/
 │   │   │   ├── __init__.py
-│   │   │   └── first_run.py
+│   │   │   ├── first_run.py
+│   │   │   └── relocate.py
 │   │   ├── pages/
 │   │   │   ├── __init__.py
 │   │   │   ├── dashboard.py
@@ -66,6 +67,7 @@ llama_gui/
 │   ├── orchestrator.py
 │   ├── paths.py
 │   ├── progress.py
+│   ├── relocate.py
 │   ├── resolver.py
 │   ├── schemas.py
 │   └── state.py
@@ -93,6 +95,7 @@ llama_gui/
 │   │   ├── test_model_table.py
 │   │   ├── test_models_section.py
 │   │   ├── test_progress_widget.py
+│   │   ├── test_relocate_dialog.py
 │   │   ├── test_settings_page.py
 │   │   ├── test_token.py
 │   │   └── test_worker_progress_threading.py
@@ -118,6 +121,7 @@ llama_gui/
 │   │   ├── test_paths.py
 │   │   ├── test_prebuilt.py
 │   │   ├── test_progress.py
+│   │   ├── test_relocate.py
 │   │   ├── test_resolver.py
 │   │   ├── test_scripts.py
 │   │   ├── test_serverargs.py

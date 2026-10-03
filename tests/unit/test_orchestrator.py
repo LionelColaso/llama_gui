@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import platform as _platform
 import threading
 from contextlib import AbstractContextManager
@@ -10,11 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.config import AppConfig
+from app.config import AppConfig, config_file
 from app.locking import LockAcquisitionError, mutation_lock
 from app.orchestrator import Orchestrator
 from app.resolver import ResolvedBinary
 from app.schemas import EngineError, InstallResultItem
+from app.state import read_junction_target
 
 _SYSTEM = _platform.system().lower()
 _EXE_SUFFIX = ".exe" if _SYSTEM == "windows" else ""
@@ -39,6 +41,347 @@ def test_describe_marks_unavailable_backends(tmp_path: Path) -> None:
     unusable = "metal" if _SYSTEM != "darwin" else "cuda12"
     assert by_name[unusable].prebuilt_available is False
     assert by_name[unusable].unavailable_reason
+
+
+# ─── "Use default" root reset ─────────────────────────────────────────────
+
+
+def test_reset_root_removes_the_override_and_follows_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.paths import default_root
+
+    sandbox = tmp_path / "default-root"
+    monkeypatch.setattr("app.paths.LEGACY_ROOT", sandbox)
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    custom = tmp_path / "custom-root"
+    orch = Orchestrator(AppConfig(root=str(custom), root_is_default=False))
+    orch.save_config({"host": "0.0.0.0"})
+    assert json.loads(config_file().read_text(encoding="utf-8"))["root"] == str(custom)
+
+    data = orch.reset_root()
+
+    assert orch.cfg.root == str(default_root())
+    assert "root" not in json.loads(config_file().read_text(encoding="utf-8"))
+    # Unrelated settings survive the reset.
+    assert orch.cfg.host == "0.0.0.0"
+    assert data.values["root"] == str(default_root())
+    assert any("restart" in w.lower() for w in data.warnings)
+
+
+def test_reset_root_on_an_already_default_root_is_a_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.paths import default_root
+
+    monkeypatch.setattr("app.paths.LEGACY_ROOT", tmp_path / "absent")
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    orch = Orchestrator(AppConfig())
+    orch.reset_root()
+
+    assert orch.cfg.root == str(default_root())
+    assert orch.cfg.root_is_default is True
+
+
+# ─── "Use default" models-directory reset ──────────────────────────────────
+
+
+def test_reset_models_dir_removes_the_override_and_follows_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    custom = tmp_path / "my models"
+    orch = Orchestrator(
+        AppConfig(
+            root=str(tmp_path / "root"), root_is_default=False, models_dir=str(custom)
+        )
+    )
+    orch.save_config({"host": "0.0.0.0"})
+    stored = json.loads(config_file().read_text(encoding="utf-8"))
+    assert stored["models_dir"] == str(custom)
+
+    data = orch.reset_models_dir()
+
+    expected = tmp_path / "root" / "models"
+    assert orch.cfg.models_dir == ""
+    assert orch.cfg.models_dir_path == expected
+    assert "models_dir" not in json.loads(config_file().read_text(encoding="utf-8"))
+    # Unrelated settings survive the reset.
+    assert orch.cfg.host == "0.0.0.0"
+    # A read of the settings still reports the directory in effect.
+    assert data.values["models_dir"] == str(expected)
+    assert any("restart" in w.lower() for w in data.warnings)
+
+
+def test_reset_models_dir_moves_models_back_with_a_root_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reset, then move the root: the models directory must follow it.
+
+    This is the regression the absent-key storage exists for — storing the
+    resolved path would leave the library behind in the old location.
+    """
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    orch = Orchestrator(AppConfig(models_dir=str(tmp_path / "my models")))
+    orch.reset_models_dir()
+    orch.save_config({"root": str(tmp_path / "moved")})
+
+    assert orch.cfg.models_dir_path == tmp_path / "moved" / "models"
+
+
+# ─── Relocating existing data when a path changes ──────────────────────────
+
+
+def _backend_tree(root: Path, name: str = "vulkan") -> Path:
+    """A managed root holding one installed backend, as install would leave it."""
+    backend = root / "managed" / name
+    backend.mkdir(parents=True)
+    (backend / "llama-server.exe").write_bytes(b"binary")
+    (backend / ".version").write_text("b1\nmanaged-prebuilt\n", encoding="utf-8")
+    (root / "state").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "active.txt").write_text(f"{name}\n", encoding="utf-8")
+    return backend
+
+
+def _model(root: Path, name: str = "model.gguf", size: int = 8) -> Path:
+    """Add a model to ``<root>/models`` and return that directory."""
+    models = root / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    (models / name).write_bytes(b"m" * size)
+    return models
+
+
+def test_plan_offers_nothing_when_the_paths_do_not_change(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _backend_tree(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.plan_relocation(root=str(root), models_dir="")
+
+    assert plan.backends is None
+    assert plan.models is None
+    assert plan.requires_choice is False
+
+
+def test_plan_reports_backends_and_models_for_a_root_change(tmp_path: Path) -> None:
+    """Changing the root drags the default models directory along with it."""
+    root = tmp_path / "root"
+    _backend_tree(root)
+    _model(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.plan_relocation(root=str(tmp_path / "elsewhere"), models_dir="")
+
+    assert plan.backends is not None
+    assert plan.backends.source == str(root / "managed")
+    assert plan.backends.destination == str(tmp_path / "elsewhere" / "managed")
+    assert plan.backends.files == 2
+    assert plan.models is not None
+    assert plan.models.source == str(root / "models")
+    assert plan.models.destination == str(tmp_path / "elsewhere" / "models")
+    assert plan.requires_choice is True
+
+
+def test_plan_reports_only_models_when_only_the_models_dir_moves(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    _backend_tree(root)
+    _model(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+    elsewhere = str(tmp_path / "gguf")
+
+    plan = orch.plan_relocation(root=str(root), models_dir=elsewhere)
+
+    assert plan.backends is None
+    assert plan.models is not None
+    assert plan.models.destination == elsewhere
+
+
+def test_plan_reports_both_when_both_move_at_once(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _backend_tree(root)
+    _model(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.plan_relocation(
+        root=str(tmp_path / "new-root"), models_dir=str(tmp_path / "new-models")
+    )
+
+    assert plan.backends is not None
+    assert plan.models is not None
+
+
+def _blocked_destination(tmp_path: Path) -> tuple[Orchestrator, Path]:
+    """A models directory, plus a destination that already holds a model."""
+    root = tmp_path / "root"
+    _model(root)
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "other.gguf").write_bytes(b"x")
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+    return orch, occupied
+
+
+def test_plan_blocks_a_destination_that_already_holds_files(
+    tmp_path: Path,
+) -> None:
+    orch, occupied = _blocked_destination(tmp_path)
+
+    plan = orch.plan_relocation(root=orch.cfg.root, models_dir=str(occupied))
+
+    assert plan.models is not None
+    assert "already contains files" in plan.models.blocked
+
+
+def test_plan_blocks_a_destination_inside_the_source(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _model(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.plan_relocation(root=str(root), models_dir=str(root / "models" / "sub"))
+
+    assert plan.models is not None
+    assert "inside" in plan.models.blocked
+
+
+def test_plan_notes_interrupted_downloads_that_stay_behind(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    models = _model(root)
+    (models / "model.gguf.part").write_bytes(b"p")
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.plan_relocation(root=str(root), models_dir=str(tmp_path / "new"))
+
+    assert any("interrupted" in note for note in plan.notes)
+
+
+def test_relocate_moves_the_backends_and_the_models_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLAMAGUI_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    root = tmp_path / "root"
+    _backend_tree(root)
+    _model(root)
+    new_root = tmp_path / "new-root"
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.relocate_data(
+        root=str(new_root), models_dir="", move_backends=True, move_models=True
+    )
+
+    assert plan.backends is not None and plan.backends.transfer == "move"
+    assert plan.models is not None and plan.models.transfer == "move"
+    assert (new_root / "managed" / "vulkan" / "llama-server.exe").is_file()
+    assert (new_root / "managed" / "vulkan" / ".version").is_file()
+    assert (new_root / "models" / "model.gguf").is_file()
+    # The backend tree is gone from the old root; its ``state/`` marker and the
+    # models directory itself stay (a models dir belongs to the user).
+    assert not (root / "managed").exists()
+    assert not (root / "models" / "model.gguf").exists()
+    # The active-backend selection travels with the backends.
+    assert (new_root / "state" / "active.txt").read_text().strip() == "vulkan"
+    # The settings file is untouched: the caller saves only after a good move.
+    assert orch.cfg.root == str(root)
+
+
+def test_relocate_repoints_the_current_link_at_the_new_location(
+    tmp_path: Path, fake_root_with_junction: Path
+) -> None:
+    """``managed/current`` is an absolute link, so it cannot just travel along."""
+    new_root = tmp_path / "new-root"
+    orch = Orchestrator(AppConfig(root=str(fake_root_with_junction)))
+
+    orch.relocate_data(root=str(new_root), move_backends=True, move_models=False)
+
+    current = new_root / "managed" / "current"
+    assert current.exists()
+    target = read_junction_target(new_root)
+    assert target is not None
+    assert Path(target).name == "vulkan"
+    assert current.resolve() == (new_root / "managed" / "vulkan").resolve()
+    assert not (fake_root_with_junction / "managed" / "current").exists()
+
+
+def test_copy_keeps_the_old_location_intact(
+    tmp_path: Path, fake_root_with_junction: Path
+) -> None:
+    """Copy & save: the new location is filled and the old one is still there."""
+    root = fake_root_with_junction
+    _model(root)
+    new_root = tmp_path / "new-root"
+    orch = Orchestrator(AppConfig(root=str(root)))
+
+    plan = orch.relocate_data(
+        root=str(new_root),
+        models_dir="",
+        transfer="copy",
+        move_backends=True,
+        move_models=True,
+    )
+
+    assert plan.copied is True
+    assert {item.transfer for item in plan.transferred} == {"copy"}
+    assert (new_root / "managed" / "vulkan" / ".version").is_file()
+    assert (new_root / "models" / "model.gguf").is_file()
+    # The destination gets its own link, and the source keeps everything.
+    assert (new_root / "managed" / "current").exists()
+    assert (root / "managed" / "current").exists()
+    assert (root / "managed" / "vulkan" / ".version").is_file()
+    assert (root / "models" / "model.gguf").is_file()
+
+
+def test_relocate_can_move_only_the_models(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _backend_tree(root)
+    _model(root)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+    elsewhere = tmp_path / "new-models"
+
+    orch.relocate_data(root=str(root), models_dir=str(elsewhere), move_models=True)
+
+    assert (elsewhere / "model.gguf").is_file()
+    # The backends were not asked for, so they stay exactly where they were.
+    assert (root / "managed" / "vulkan" / "llama-server.exe").is_file()
+    assert not (root / "models" / "model.gguf").exists()
+    assert root.is_dir()
+
+
+def test_relocate_skips_a_blocked_move_instead_of_forcing_it(
+    tmp_path: Path,
+) -> None:
+    orch, occupied = _blocked_destination(tmp_path)
+
+    plan = orch.relocate_data(
+        root=orch.cfg.root,
+        models_dir=str(occupied),
+        move_backends=True,
+        move_models=True,
+    )
+
+    assert plan.models is not None
+    assert plan.models.transfer == ""
+    assert (orch.cfg.root_path / "models" / "model.gguf").is_file()
+    assert (occupied / "other.gguf").read_bytes() == b"x"
+
+
+def test_relocate_of_an_empty_location_moves_nothing(tmp_path: Path) -> None:
+    """A root with no backends and no models has nothing to offer."""
+    root = tmp_path / "root"
+    (root / "state").mkdir(parents=True)
+    orch = Orchestrator(AppConfig(root=str(root), root_is_default=False))
+
+    plan = orch.relocate_data(
+        root=str(tmp_path / "new"), move_backends=True, move_models=True
+    )
+
+    assert plan.items == []
+    assert plan.transferred == []
 
 
 # ─── first_run_needed validates, unlike status().ready ──────────────────────

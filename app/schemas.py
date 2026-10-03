@@ -207,6 +207,55 @@ class DescribeData(BaseModel):
     platform: PlatformData = PlatformData()
 
 
+class RelocationItem(BaseModel):
+    """One tree that a path change would move."""
+
+    label: str = ""
+    source: str = ""
+    destination: str = ""
+    files: int = 0
+    total_bytes: int = 0
+    #: How this tree was actually transferred once it ran (``"move"`` or
+    #: ``"copy"``). Empty when it did not run, so a result says what happened.
+    transfer: str = ""
+    #: Why the move cannot be offered (e.g. the destination is not empty).
+    #: Empty when the move is possible.
+    blocked: str = ""
+
+
+class RelocationData(BaseModel):
+    """What changing the managed root and/or the models directory implies.
+
+    Both trees are planned independently, so one may change while the other
+    does not, and both may change at once. A ``None`` field means that tree is
+    not moving (unchanged location, or nothing to move).
+    """
+
+    backends: RelocationItem | None = None
+    models: RelocationItem | None = None
+    #: Things the user should know that are not part of the move itself.
+    notes: list[str] = []
+
+    @property
+    def items(self) -> list[RelocationItem]:
+        return [item for item in (self.backends, self.models) if item is not None]
+
+    @property
+    def requires_choice(self) -> bool:
+        """True when there is data to move and the user must be asked about it."""
+        return any(item.files > 0 for item in self.items)
+
+    @property
+    def transferred(self) -> list[RelocationItem]:
+        """The trees that actually moved or were copied."""
+        return [item for item in self.items if item.transfer]
+
+    @property
+    def copied(self) -> bool:
+        """True when at least one tree was copied rather than moved."""
+        return any(item.transfer == "copy" for item in self.items)
+
+
 class Envelope(BaseModel):
     contract_version: str
     ok: bool

@@ -62,7 +62,8 @@ class AppConfig:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     default_backend: str = field(default_factory=default_backend)
-    #: Directory holding the user's .gguf models. Empty = ``<root>/models``.
+    #: Directory holding the user's .gguf models. Empty = ``<root>/models``
+    #: (see :attr:`models_dir_is_default` for how that is stored).
     models_dir: str = ""
     #: File name of the model the server launches (empty = none selected).
     active_model: str = ""
@@ -100,6 +101,30 @@ class AppConfig:
     load_warnings: list[str] = field(
         default_factory=lambda: cast("list[str]", []), repr=False
     )
+    #: True when ``root`` is :func:`default_root` rather than a user override.
+    #: Never persisted as such: a default root is written back as an **absent**
+    #: ``root`` key, so the app keeps following the platform default (which can
+    #: move when a legacy ``~/.llamagui`` appears or disappears) instead of
+    #: freezing today's value into the file.
+    root_is_default: bool = field(default=True, repr=False)
+    #: True when ``models_dir`` is empty (i.e. ``<root>/models``) rather than a
+    #: user override. Stored the same way as :attr:`root_is_default`: a default
+    #: models directory is written back as an **absent** ``models_dir`` key, so
+    #: it keeps following the managed root instead of freezing today's path.
+    models_dir_is_default: bool = field(default=True, repr=False)
+
+    def __post_init__(self) -> None:
+        """Derive path provenance when the caller did not state it.
+
+        Constructing ``AppConfig(root=...)`` (or ``models_dir=...``) means "the
+        user picked this path", so it must be persisted even when the caller
+        forgot to say so. Only values that are still the platform default (or,
+        for ``models_dir``, empty) are stored as an absent key.
+        """
+        if self.root_is_default and self.root != str(default_root()):
+            self.root_is_default = False
+        if self.models_dir_is_default and self.models_dir:
+            self.models_dir_is_default = False
 
     # ─── Load ────────────────────────────────────────────────────────────
 
@@ -174,8 +199,11 @@ class AppConfig:
         #
         # The GitHub token is never persisted in plaintext; it lives in the OS
         # keyring (gui/token.py). A legacy plaintext token is ignored on load.
+        saved_root = _clean_str(data.get("root"))
+        saved_models_dir = _clean_str(data.get("models_dir"))
         return cls(
-            root=_clean_str(data.get("root")) or str(default_root()),
+            root=saved_root or str(default_root()),
+            root_is_default=saved_root is None,
             host=_clean_str(data.get("host")) or DEFAULT_HOST,
             port=_coerce_int_clamped(
                 data.get("port"),
@@ -188,7 +216,8 @@ class AppConfig:
             default_backend=_clean_str(data.get("default_backend"))
             or default_backend(),
             use_os_llama_server=bool(data.get("use_os_llama_server", False)),
-            models_dir=_clean_str(data.get("models_dir")) or "",
+            models_dir=saved_models_dir or "",
+            models_dir_is_default=saved_models_dir is None,
             active_model=_clean_str(data.get("active_model")) or "",
             ctx_size=_coerce_int_clamped(
                 data.get("ctx_size"),
@@ -280,6 +309,15 @@ class AppConfig:
                 "token": "",
             }
         )
+        if self.root_is_default:
+            # Absent, not blank: a blank value is indistinguishable from a user
+            # who deliberately cleared the field, and storing the resolved path
+            # would pin the root even after "Use default" was pressed.
+            data.pop("root", None)
+        if self.models_dir_is_default:
+            # Same reasoning as ``root``: an empty value already means "follow
+            # the managed root", so the key is dropped rather than pinned.
+            data.pop("models_dir", None)
         return data
 
     # ─── Derived paths ───────────────────────────────────────────────────

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.config import AppConfig, config_file
+from app.paths import default_root
 
 
 def test_save_then_load_round_trips(tmp_path: Path) -> None:
@@ -79,6 +80,124 @@ def test_unknown_keys_are_preserved(tmp_path: Path) -> None:
     reparsed = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert reparsed["future_setting"] == {"nested": True}
     assert reparsed["experimental_flag"] == 7
+
+
+# ─── Default root: stored as an absent key, not a frozen path ─────────────
+
+
+def test_default_root_is_not_written_to_the_file(tmp_path: Path) -> None:
+    """A default root must be stored as an *absent* key.
+
+    Writing today's resolved path back would pin the root: the "Use default"
+    button could never start tracking the platform default again once the
+    legacy ``~/.llamagui`` appears or disappears.
+    """
+    cfg_path = tmp_path / "config.json"
+    AppConfig().save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "root" not in stored
+    assert AppConfig.load(cfg_path).root_is_default is True
+
+
+def test_user_root_override_round_trips(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg = AppConfig(root=str(tmp_path / "custom"), root_is_default=False)
+    cfg.save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert stored["root"] == str(tmp_path / "custom")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.root == str(tmp_path / "custom")
+    assert loaded.root_is_default is False
+
+
+def test_blank_root_in_the_file_reads_as_the_default(tmp_path: Path) -> None:
+    """A hand-edited blank root must not produce an empty managed root."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"root": "   "}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.root == str(default_root())
+    assert loaded.root_is_default is True
+
+
+def test_saving_an_unrelated_setting_keeps_the_root_absent(tmp_path: Path) -> None:
+    """Changing the theme must not accidentally pin a default root."""
+    cfg_path = tmp_path / "config.json"
+    AppConfig().save(cfg_path)
+    cfg_path.write_text(
+        json.dumps(
+            {**json.loads(cfg_path.read_text(encoding="utf-8")), "theme": "dark"}
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = AppConfig.load(cfg_path)
+    loaded.save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert stored["theme"] == "dark"
+    assert "root" not in stored
+
+
+# ─── Default models directory: same absent-key treatment as the root ───────
+
+
+def test_default_models_dir_is_not_written_to_the_file(tmp_path: Path) -> None:
+    """An unset models directory must be stored as an *absent* key.
+
+    Writing the resolved ``<root>/models`` back would pin it, so the "Use
+    default" button could never follow a later root change again.
+    """
+    cfg_path = tmp_path / "config.json"
+    AppConfig().save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert "models_dir" not in stored
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.models_dir == ""
+    assert loaded.models_dir_is_default is True
+    assert loaded.models_dir_path == loaded.root_path / "models"
+
+
+def test_user_models_dir_override_round_trips(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.json"
+    cfg = AppConfig(models_dir=str(tmp_path / "my models"))
+    cfg.save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert stored["models_dir"] == str(tmp_path / "my models")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.models_dir == str(tmp_path / "my models")
+    assert loaded.models_dir_is_default is False
+    assert loaded.models_dir_path == Path(tmp_path / "my models")
+
+
+def test_blank_models_dir_in_the_file_reads_as_the_default(tmp_path: Path) -> None:
+    """A hand-edited blank models_dir must not scan the current directory."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"models_dir": "   "}), encoding="utf-8")
+
+    loaded = AppConfig.load(cfg_path)
+    assert loaded.models_dir == ""
+    assert loaded.models_dir_is_default is True
+
+
+def test_saving_an_unrelated_setting_keeps_the_models_dir_absent(
+    tmp_path: Path,
+) -> None:
+    cfg_path = tmp_path / "config.json"
+    AppConfig().save(cfg_path)
+    loaded = AppConfig.load(cfg_path)
+    loaded.theme = "dark"
+    loaded.save(cfg_path)
+
+    stored = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert stored["theme"] == "dark"
+    assert "models_dir" not in stored
 
 
 # ─── test isolation (autouse fixture in tests/conftest.py) ─────────────────

@@ -8,6 +8,9 @@ never spawn a subprocess.
 from __future__ import annotations
 
 import os
+import shutil
+from collections.abc import Callable, Generator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +23,7 @@ from .backends.catalogue import (
 )
 from .backends.prebuilt import (
     clear_release_cache,
+    emit_progress,
     install_backend,
     list_assets,
 )
@@ -37,7 +41,7 @@ from .lifecycle import (
     running_pids,
     stop_processes,
 )
-from .links import link_current
+from .links import link_current, remove_link
 from .locking import mutation_lock
 from .model_store import (
     ModelDownloadError,
@@ -48,6 +52,8 @@ from .model_store import (
     remove_model,
 )
 from .paths import arch_key, config_file, exe_suffix, platform_key
+from .relocate import Transfer, contains, is_empty_dir, scan
+from .relocate import transfer as transfer_tree
 from .resolver import resolve_llama_server
 from .schemas import (
     BackendInfo,
@@ -65,6 +71,8 @@ from .schemas import (
     PendingDownloadInfo,
     PendingDownloadsData,
     PlatformData,
+    RelocationData,
+    RelocationItem,
     ResolveData,
     ResolvedBinaryData,
     ServerStatusData,
@@ -109,6 +117,10 @@ ACTIONS = (
     "set-arg",
     "clear-args",
 )
+
+#: Human-readable names for the path settings that can be reset to their
+#: default, used in the "Use default" confirmation message.
+_PATH_LABELS = {"root": "Managed root", "models_dir": "Models directory"}
 
 
 class Orchestrator:
@@ -232,9 +244,15 @@ class Orchestrator:
     # ─── Settings ────────────────────────────────────────────────────────
 
     def config(self) -> ConfigData:
+        values = self.cfg.to_dict()
+        # ``to_dict`` omits ``root``/``models_dir`` when they are the platform
+        # default (so the file stores no override), but a *read* of the settings
+        # must still say which paths are in effect.
+        values["root"] = self.cfg.root
+        values["models_dir"] = str(self.cfg.models_dir_path)
         return ConfigData(
             config_file=str(config_file()),
-            values=self.cfg.to_dict(),
+            values=values,
             warnings=list(self.cfg.load_warnings),
         )
 
@@ -253,6 +271,204 @@ class Orchestrator:
         updated.save()
         self.cfg = updated
         return self.config()
+
+    def reset_root(self) -> ConfigData:
+        """Drop the saved root override so the app follows the platform default.
+
+        See :meth:`_reset_path_setting`; the root's default comes from
+        :func:`default_root`, which moves when a legacy ``~/.llamagui`` appears
+        or disappears.
+
+        Not a CLI action: it exists for the Settings page's "Use default" action
+        and is deliberately not part of the ``ACTIONS`` contract.
+        """
+        return self._reset_path_setting("root")
+
+    def reset_models_dir(self) -> ConfigData:
+        """Drop the saved models directory override (back to ``<root>/models``).
+
+        Not a CLI action, for the same reason as :meth:`reset_root`.
+        """
+        return self._reset_path_setting("models_dir")
+
+    def _reset_path_setting(self, key: str) -> ConfigData:
+        """Clear one path override and persist it as an absent key.
+
+        The key is *removed* from the settings file rather than rewritten with
+        today's value, so the choice keeps following the default (see
+        :meth:`AppConfig.to_dict`). Nothing is deleted from disk: an existing
+        model library or backend tree stays where it is until the user points
+        the setting back at it.
+        """
+        previous = str(getattr(self.cfg, key))
+        data = self.cfg.to_dict()
+        data.pop(key, None)
+        updated = AppConfig.from_dict(data)
+        updated.token = self.cfg.token
+        updated.save()
+        self.cfg = updated
+        result = self.config()
+        current = str(getattr(self.cfg, key))
+        result.warnings.append(
+            f"{_PATH_LABELS[key]} reset to {current} (was {previous}). "
+            "Restart the app for every view to pick it up."
+        )
+        return result
+
+    # ─── Relocation ───────────────────────────────────────────────────────
+
+    def plan_relocation(
+        self, *, root: str | None = None, models_dir: str | None = None
+    ) -> RelocationData:
+        """What changing the managed root and/or models directory would move.
+
+        Both trees are planned independently, so changing only one of them (or
+        changing both at once, which is what moving the root usually implies for
+        a default models directory) is handled without special cases. Nothing is
+        written or touched — this only reads the two trees.
+
+        ``root``/``models_dir`` are the raw values from the settings form, where
+        an empty string means "follow the default".
+        """
+        plan, _ = self._relocation(root, models_dir)
+        if plan.models is not None and not plan.models.blocked:
+            old_models = self.cfg.models_dir_path
+            parts, _ = scan(old_models, suffixes=(".part",))
+            if parts:
+                plan.notes.append(
+                    f"{parts} interrupted model download(s) stay behind in "
+                    f"{old_models}."
+                )
+        return plan
+
+    def relocate_data(
+        self,
+        *,
+        root: str | None = None,
+        models_dir: str | None = None,
+        transfer: Transfer = "move",
+        move_backends: bool = False,
+        move_models: bool = False,
+    ) -> RelocationData:
+        """Move or copy existing backends and/or models to a newly chosen location.
+
+        Each tree is transferred only when the caller asked for it, so the user
+        can relocate the backends and leave the model library alone (or vice
+        versa), and either both at once. ``transfer`` picks move (the old copy is
+        dropped) or copy (it is kept as a backup); a blocked tree is skipped
+        rather than forced.
+
+        The settings file is **not** written here: the caller persists the new
+        paths once the transfer succeeded, so a failure leaves the config pointing
+        at the data that is still there.
+
+        Like :meth:`reset_root`, this is a GUI-only action and not part of the
+        ``ACTIONS`` contract.
+        """
+        plan, pending = self._relocation(root, models_dir)
+        with _relocation_locks(self.root, pending.root_path):
+            if move_backends and plan.backends and not plan.backends.blocked:
+                self._transfer_backends(
+                    self.managed_root, pending.managed_dir, transfer
+                )
+                plan.backends.transfer = transfer
+            if move_models and plan.models and not plan.models.blocked:
+                transfer_tree(
+                    self.cfg.models_dir_path,
+                    pending.models_dir_path,
+                    suffixes=(".gguf",),
+                    emit=_progress_relocator("models"),
+                    remove_source=transfer == "move",
+                )
+                plan.models.transfer = transfer
+        return plan
+
+    def _relocation(
+        self, root: str | None, models_dir: str | None
+    ) -> tuple[RelocationData, AppConfig]:
+        """Plan a pending path change together with the config it would produce.
+
+        Each tree is decided on its own, so a change to one location never
+        disturbs the other and both can move in a single step.
+        """
+        pending = self._pending_config(root, models_dir)
+        plan = RelocationData()
+        if not _same_location(self.root, pending.root_path):
+            plan.backends = self._plan_item(
+                "Backends", self.managed_root, pending.managed_dir
+            )
+        if not _same_location(self.cfg.models_dir_path, pending.models_dir_path):
+            plan.models = self._plan_item(
+                "Models",
+                self.cfg.models_dir_path,
+                pending.models_dir_path,
+                suffixes=(".gguf",),
+            )
+        return plan, pending
+
+    def _transfer_backends(
+        self, source: Path, destination: Path, transfer: Transfer
+    ) -> None:
+        """Relocate the backend tree and re-point ``managed/current`` at it.
+
+        ``managed/current`` cannot simply travel with the tree: it is a link with
+        an absolute target, so it is dropped before a move (a copy leaves the old
+        location completely untouched) and re-created against the new one in both
+        cases. The active-backend marker (``state/active.txt``) travels so the
+        user's selection survives; the pid file and the logs stay behind, because
+        they describe the old location and a server that may still be running.
+        """
+        old_root = source.parent
+        new_root = destination.parent
+        name = read_active_backend(old_root) or _linked_backend(source)
+        if transfer == "move":
+            remove_link(source / "current")
+        transfer_tree(
+            source,
+            destination,
+            emit=_progress_relocator("backends"),
+            remove_source=transfer == "move",
+        )
+        if not name or not (destination / name).is_dir():
+            return
+        link_current(destination / "current", destination / name)
+        marker = old_root / "state" / "active.txt"
+        target = new_root / "state" / "active.txt"
+        if marker.is_file() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(marker, target)
+
+    def _plan_item(
+        self,
+        label: str,
+        source: Path,
+        destination: Path,
+        *,
+        suffixes: tuple[str, ...] | None = None,
+    ) -> RelocationItem | None:
+        """Describe one candidate move, or ``None`` when there is nothing to move."""
+        files, total = scan(source, suffixes=suffixes)
+        if files == 0:
+            return None
+        return RelocationItem(
+            label=label,
+            source=str(source),
+            destination=str(destination),
+            files=files,
+            total_bytes=total,
+            blocked=_blocked_reason(source, destination),
+        )
+
+    def _pending_config(self, root: str | None, models_dir: str | None) -> AppConfig:
+        """The config as it would be *after* the pending path change.
+
+        Resolved by the same code that loads the real settings, so the preview
+        and the move can never disagree about where things end up.
+        """
+        data = self.cfg.to_dict()
+        data["root"] = root or ""
+        data["models_dir"] = models_dir or ""
+        return AppConfig.from_dict(data)
 
     # ─── Obtain ──────────────────────────────────────────────────────────
 
@@ -773,6 +989,66 @@ class Orchestrator:
 
 
 # ─── Module helpers ───────────────────────────────────────────────────────
+
+
+def _same_location(left: Path, right: Path) -> bool:
+    """True when two paths name the same place on this platform.
+
+    Compared on the absolute normalised form first (which settles the Windows
+    case-insensitivity and ``C:/x`` vs ``C:\\x``) and then on the resolved form,
+    so two different spellings of one directory never look like a change.
+    """
+
+    def normalised(path: Path) -> str:
+        return os.path.normcase(os.path.abspath(str(path)))
+
+    if normalised(left) == normalised(right):
+        return True
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _blocked_reason(source: Path, destination: Path) -> str:
+    """Why this move must not run, or ``""`` when it is safe to offer."""
+    if contains(source, destination):
+        return "the new location is inside the current one"
+    if not is_empty_dir(destination):
+        return "the new location already contains files"
+    return ""
+
+
+def _linked_backend(managed: Path) -> str | None:
+    """The backend name ``managed/current`` points at, if it is set."""
+    target = read_junction_target(managed.parent)
+    return Path(target).name if target else None
+
+
+def _progress_relocator(
+    component: str,
+) -> Callable[[int, int, str, float | None], None]:
+    """Adapt the engine's progress channel to :func:`app.relocate.transfer`."""
+
+    def emit(done: int, total: int, phase: str, overall: float | None) -> None:
+        emit_progress(component, done, total, phase, overall)
+
+    return emit
+
+
+@contextmanager
+def _relocation_locks(*roots: Path) -> Generator[None, None, None]:
+    """Hold the mutation lock of every root a relocation touches.
+
+    A relocation reads from one root and writes into another, so both are locked
+    (invariant #15). Sorting the roots makes the acquisition order identical for
+    every caller, which is what stops two concurrent relocations from
+    deadlocking against each other.
+    """
+    with ExitStack() as stack:
+        for root in sorted(set(roots), key=lambda path: str(path).lower()):
+            stack.enter_context(mutation_lock(root))
+        yield
 
 
 def _is_within(child: Path, base: Path) -> bool:

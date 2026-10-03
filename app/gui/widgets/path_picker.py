@@ -64,6 +64,15 @@ class PathPicker(QWidget):
     def setText(self, value: str | None) -> None:
         self._edit.setText(value or "")
 
+    def setPlaceholderText(self, text: str) -> None:
+        """Hint at the value in effect while the field itself stays empty.
+
+        Used for settings that are "blank = follow the default": a filled field
+        would be indistinguishable from a real override and would be sent back
+        as one on the next save.
+        """
+        self._edit.setPlaceholderText(text)
+
     # ─── Browse ──────────────────────────────────────────────────────────
 
     def _start_dir(self) -> str:
