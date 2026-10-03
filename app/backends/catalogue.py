@@ -50,7 +50,12 @@ class Backend:
     def asset_pattern(
         self, platform: str | None = None, arch: str | None = None
     ) -> str | None:
-        """Return the release-asset regex for a platform, or None if unavailable."""
+        """Return the release-asset regex for a platform, or None if unavailable.
+
+        A pattern carries ``{arch}`` when llama.cpp publishes per-architecture
+        assets for that platform, so a pattern that still lacks the placeholder
+        means the row only ever ships one architecture.
+        """
         pattern = self.assets.get(platform or platform_key())
         if pattern is None:
             return None
@@ -61,16 +66,27 @@ class Backend:
     ) -> bool:
         return self.asset_pattern(platform, arch) is not None
 
+    def cudart_asset_pattern(self, arch: str | None = None) -> str | None:
+        """Return the CUDA runtime pack regex, or None when there is none."""
+        if self.cudart_pattern is None:
+            return None
+        return self.cudart_pattern.format(arch=arch or arch_key())
 
-#: Windows CUDA assets are named ``...-cuda-12.4-x64.zip``; the minor version
-#: moves between releases, so match the major version and any separator.
-_WIN_CUDA12 = r"llama-.*-bin-win-cuda-12[.\-_]\d+-x64\.zip"
-_WIN_CUDA13 = r"llama-.*-bin-win-cuda-13[.\-_]\d+-x64\.zip"
+
+#: Windows CUDA assets are named ``...-bin-win-cuda-12.4-x64.zip``; the minor
+#: version moves between releases, so match the major version and any separator.
+_WIN_CUDA12 = r"llama-.*-bin-win-cuda-12[.\-_]\d+-{arch}\.zip"
+_WIN_CUDA13 = r"llama-.*-bin-win-cuda-13[.\-_]\d+-{arch}\.zip"
 # Anchored on ``cudart-`` so the ~390 MB DLL pack never collides with the
 # ~150 MB binary archive, and on the CUDA major version so cuda12 can never
 # pick up the CUDA 13 runtime (invariant #1 / #11).
-_WIN_CUDART12 = r"cudart-.*cuda-12[.\-_]\d+-x64\.zip"
-_WIN_CUDART13 = r"cudart-.*cuda-13[.\-_]\d+-x64\.zip"
+#
+# ``{arch}`` matters here: llama.cpp publishes Windows CUDA 13 for both x64 and
+# arm64 but CUDA 12 for x64 only, and Vulkan for x64 only. Without the
+# placeholder a Windows-on-ARM machine would be offered an emulated x64 build
+# while the catalogue claimed a native one.
+_WIN_CUDART12 = r"cudart-.*cuda-12[.\-_]\d+-{arch}\.zip"
+_WIN_CUDART13 = r"cudart-.*cuda-13[.\-_]\d+-{arch}\.zip"
 
 
 BACKENDS: tuple[Backend, ...] = (
@@ -78,7 +94,7 @@ BACKENDS: tuple[Backend, ...] = (
         name="vulkan",
         notes="Vulkan GPU acceleration; broadest GPU support (default on Windows/Linux)",
         assets={
-            "win32": r"llama-.*-bin-win-vulkan-x64\.zip",
+            "win32": r"llama-.*-bin-win-vulkan-{arch}\.zip",
             "linux": r"llama-.*-bin-ubuntu-vulkan-{arch}\.tar\.gz",
         },
     ),

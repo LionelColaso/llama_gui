@@ -19,9 +19,10 @@ import zipfile
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
+from loguru import logger
 
 from ..download import DownloadCancelled, DownloadError, stream_download
 from ..paths import (
@@ -32,6 +33,12 @@ from ..paths import (
 from .catalogue import Backend, backend_availability, get_backend
 
 LLAMA_CPP_REPO = "ggml-org/llama.cpp"
+
+_API = "https://api.github.com/repos"
+
+#: Asset name of the marker file in llama.cpp's stub release. Its body is the
+#: nightly tag (``b1234``) whose own release carries the real build assets.
+_NIGHTLY_MARKER = "nightly-tag.txt"
 
 
 class PrebuiltError(Exception):
@@ -57,11 +64,14 @@ def _cudart_pattern(entry: Backend, mode: str) -> str | None:
     ``auto``   – only when the backend cannot run without it (CUDA 12).
     ``always`` – whenever the backend has a runtime pack (self-contained CUDA).
     ``never``  – rely on the CUDA toolkit installed on the machine.
+
+    The pattern is resolved through :meth:`Backend.cudart_asset_pattern` so the
+    ``{arch}`` placeholder is substituted before it reaches the regex engine.
     """
     if entry.cudart_pattern is None or mode == "never":
         return None
     if mode == "always" or entry.needs_cudart:
-        return entry.cudart_pattern
+        return entry.cudart_asset_pattern()
     return None
 
 
@@ -156,12 +166,97 @@ _RELEASE_CACHE: dict[tuple[str, str | None], tuple[float, dict[str, Any]]] = {}
 
 
 def _fetch_release(repo: str, token: str | None) -> dict[str, Any]:
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    """Return the newest llama.cpp release that actually carries build assets.
+
+    ``/releases/latest`` is **not** that release. llama.cpp keeps a permanent
+    ``v*`` release (currently ``v0.5.0``) whose only asset is
+    :data:`_NIGHTLY_MARKER` — a text file naming the current nightly tag
+    (``b11146``). Every real binary hangs off that nightly tag's release. Taking
+    ``/releases/latest`` literally therefore matched no asset at all and every
+    install failed with "No asset matching ... in release v0.5.0".
+
+    So: take ``latest``, and when it carries no build assets follow its marker
+    to the nightly release. Costs one extra request, only on the stub path, and
+    the result is memoized by :func:`latest_release` like any other fetch.
+    """
+    release = _get_release(f"{_API}/{repo}/releases/latest", repo, token)
+    if _has_build_assets(release):
+        return release
+
+    tag = _read_nightly_marker(release, repo, token)
+    if tag is None:
+        logger.warning(
+            "Release {} carries no build assets and no readable {} marker; "
+            "reporting its assets as-is.",
+            release.get("tag_name", "?"),
+            _NIGHTLY_MARKER,
+        )
+        return release
+
+    nightly = _get_release(f"{_API}/{repo}/releases/tags/{tag}", repo, token)
+    if not _has_build_assets(nightly):
+        logger.warning(
+            "Nightly release {} resolved from {} carries no build assets.",
+            tag,
+            _NIGHTLY_MARKER,
+        )
+        return release
+    logger.debug("Resolved stub release to nightly {} with real assets.", tag)
+    return nightly
+
+
+def _assets(release: dict[str, Any]) -> list[dict[str, Any]]:
+    """The release's asset objects, narrowed to dicts (the API's JSON shape)."""
+    raw: object = release.get("assets")
+    if not isinstance(raw, list):
+        return []
+    return [
+        cast("dict[str, Any]", asset)
+        for asset in cast("list[object]", raw)
+        if isinstance(asset, dict)
+    ]
+
+
+def _has_build_assets(release: dict[str, Any]) -> bool:
+    """True when a release carries at least one downloadable build asset."""
+    return any(asset.get("name") != _NIGHTLY_MARKER for asset in _assets(release))
+
+
+def _read_nightly_marker(
+    release: dict[str, Any], repo: str, token: str | None
+) -> str | None:
+    """Read the nightly tag out of a stub release's marker asset, if present."""
+    url: object = None
+    for asset in _assets(release):
+        if asset.get("name") == _NIGHTLY_MARKER:
+            url = asset.get("browser_download_url")
+            break
+    if not isinstance(url, str) or not url:
+        return None
+    headers = _headers(token)
+    try:
+        resp = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        # A missing marker must not fail the install outright: the caller falls
+        # back to the stub release and reports "no asset matching" as before.
+        logger.warning("Could not read {} from {}: {}", _NIGHTLY_MARKER, repo, e)
+        return None
+    return resp.text.strip() or None
+
+
+def _headers(token: str | None) -> dict[str, str]:
     headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _get_release(url: str, repo: str, token: str | None) -> dict[str, Any]:
     try:
-        resp = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
+        resp = httpx.get(
+            url, headers=_headers(token), timeout=30.0, follow_redirects=True
+        )
         resp.raise_for_status()
         return dict(resp.json())
     except httpx.HTTPError as e:

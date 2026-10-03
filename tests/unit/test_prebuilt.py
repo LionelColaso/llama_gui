@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Self
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from app.backends.catalogue import get_backend
@@ -43,9 +44,14 @@ _IS_WINDOWS = _PLATFORM == "win32"
 
 
 def _release_assets() -> list[dict[str, Any]]:
-    """Assets named exactly as ggml-org/llama.cpp publishes them."""
+    """Assets named exactly as ggml-org/llama.cpp publishes them.
+
+    Mirrors the real per-architecture coverage of a nightly (b11146): CUDA 13
+    ships Windows arm64, Vulkan and CUDA 12 do not.
+    """
     names = [
         "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "cudart-llama-bin-win-cuda-13.3-arm64.zip",
         "cudart-llama-bin-win-cuda-13.3-x64.zip",
         "llama-b10331-bin-macos-arm64.tar.gz",
         "llama-b10331-bin-macos-x64.tar.gz",
@@ -56,6 +62,7 @@ def _release_assets() -> list[dict[str, Any]]:
         "llama-b10331-bin-win-cpu-arm64.zip",
         "llama-b10331-bin-win-cpu-x64.zip",
         "llama-b10331-bin-win-cuda-12.4-x64.zip",
+        "llama-b10331-bin-win-cuda-13.3-arm64.zip",
         "llama-b10331-bin-win-cuda-13.3-x64.zip",
         "llama-b10331-bin-win-vulkan-x64.zip",
     ]
@@ -80,6 +87,7 @@ def fake_release() -> dict[str, Any]:
         ("win32", "x64", "cuda12", "llama-b10331-bin-win-cuda-12.4-x64.zip"),
         ("win32", "x64", "cuda13", "llama-b10331-bin-win-cuda-13.3-x64.zip"),
         ("win32", "arm64", "cpu", "llama-b10331-bin-win-cpu-arm64.zip"),
+        ("win32", "arm64", "cuda13", "llama-b10331-bin-win-cuda-13.3-arm64.zip"),
         ("linux", "x64", "vulkan", "llama-b10331-bin-ubuntu-vulkan-x64.tar.gz"),
         ("linux", "arm64", "vulkan", "llama-b10331-bin-ubuntu-vulkan-arm64.tar.gz"),
         ("linux", "x64", "cpu", "llama-b10331-bin-ubuntu-x64.tar.gz"),
@@ -99,6 +107,30 @@ def test_asset_selection_per_platform(
     assert asset["name"] == expected
 
 
+@pytest.mark.parametrize("backend", ["vulkan", "cuda12"])
+def test_no_native_windows_arm64_build_is_not_offered(backend: str) -> None:
+    """llama.cpp ships no Windows arm64 Vulkan / CUDA 12 asset.
+
+    The catalogue must report these unavailable on Windows-on-ARM rather than
+    claiming a native prebuilt it cannot deliver. (CUDA 13 *does* have an arm64
+    asset, so that row stays available — see the test above.)
+    """
+    entry = get_backend(backend)
+    assert entry is not None
+    pattern = entry.asset_pattern("win32", "arm64")
+    assert pattern is not None
+    assert match_asset(_release_assets(), pattern) is None
+
+
+def _cudart_pattern_for(backend: str, arch: str) -> str:
+    """The arch-resolved CUDA runtime pack regex for *backend*."""
+    entry = get_backend(backend)
+    assert entry is not None
+    pattern = entry.cudart_asset_pattern(arch)
+    assert pattern is not None
+    return pattern
+
+
 def test_cudart_pack_is_matched_per_cuda_major() -> None:
     """The 12.x binary must never pick up the CUDA 13 runtime (invariant #11)."""
     cuda12 = get_backend("cuda12")
@@ -107,10 +139,22 @@ def test_cudart_pack_is_matched_per_cuda_major() -> None:
     assert cuda12.cudart_pattern is not None
     assert cuda13.cudart_pattern is not None
 
-    pack12 = match_asset(_release_assets(), cuda12.cudart_pattern)
-    pack13 = match_asset(_release_assets(), cuda13.cudart_pattern)
+    pack12 = match_asset(_release_assets(), _cudart_pattern_for("cuda12", "x64"))
+    pack13 = match_asset(_release_assets(), _cudart_pattern_for("cuda13", "x64"))
     assert pack12 is not None and pack12["name"].endswith("cuda-12.4-x64.zip")
     assert pack13 is not None and pack13["name"].endswith("cuda-13.3-x64.zip")
+
+
+def test_cudart_pack_follows_the_running_arch() -> None:
+    """The arm64 CUDA 13 pack must not be served to an x64 install (and vice versa)."""
+    arm64 = match_asset(_release_assets(), _cudart_pattern_for("cuda13", "arm64"))
+    assert arm64 is not None
+    assert arm64["name"].endswith("cuda-13.3-arm64.zip")
+
+    # CUDA 12 is x64-only upstream, so an arm64 install must find nothing.
+    assert (
+        match_asset(_release_assets(), _cudart_pattern_for("cuda12", "arm64")) is None
+    )
 
 
 def test_cudart_pack_never_matches_the_binary_archive() -> None:
@@ -664,6 +708,122 @@ def test_cache_is_keyed_per_repo_and_token() -> None:
 
     # three distinct keys: (o/one, None), (o/two, None), (o/one, "tok")
     assert calls == ["o/one", "o/two", "o/one"]
+
+
+# ─── Stub-release resolution ──────────────────────────────────────────────
+
+
+class _MarkerResponse(_FakeResponse):
+    """A plain-text body (the marker asset), not a JSON payload."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__({})
+        self.text = text
+
+
+def _stub_release(tag: str = "b11146") -> dict[str, Any]:
+    """What ``/releases/latest`` actually returns for ggml-org/llama.cpp."""
+    return {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {
+                "name": "nightly-tag.txt",
+                "size": 5,
+                "browser_download_url": "https://example.com/nightly-tag.txt",
+            }
+        ],
+        "_nightly": tag,
+    }
+
+
+def test_stub_release_resolves_to_the_nightly_with_real_assets() -> None:
+    """Regression: ``/releases/latest`` is an asset-less stub, not the build.
+
+    Taking it literally made every install fail with "No asset matching ... in
+    release v0.5.0", because the binaries hang off the nightly tag instead.
+    """
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        if url.endswith("/releases/latest"):
+            return _FakeResponse(_stub_release())
+        if url.endswith("/releases/tags/b11146"):
+            return _FakeResponse(fake_release())
+        if "nightly-tag.txt" in url:
+            return _MarkerResponse("b11146\n")
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
+        release = latest_release("ggml-org/llama.cpp")
+
+    assert release["tag_name"] == "b10331"
+    assert (
+        match_asset(release["assets"], r"llama-.*-bin-win-vulkan-x64\.zip") is not None
+    )
+    assert calls[0].endswith("/releases/latest")
+    assert "nightly-tag.txt" in calls[1]
+    assert calls[2].endswith("/releases/tags/b11146")
+
+
+def test_stub_marker_download_follows_redirects() -> None:
+    """The marker URL 302s to a CDN host, so redirects must be followed."""
+    seen: list[bool] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        if url.endswith("/releases/latest"):
+            return _FakeResponse(_stub_release())
+        if url.endswith("/releases/tags/b11146"):
+            return _FakeResponse(fake_release())
+        seen.append(bool(kwargs.get("follow_redirects")))
+        return _MarkerResponse("b11146")
+
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
+        latest_release("ggml-org/llama.cpp")
+
+    assert seen == [True], "marker fetch must follow the CDN redirect"
+
+
+def test_release_with_assets_is_used_directly() -> None:
+    """No marker round-trip when the latest release already has builds."""
+    calls: list[str] = []
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        calls.append(url)
+        return _FakeResponse(fake_release())
+
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("ggml-org/llama.cpp")["tag_name"] == "b10331"
+
+    assert len(calls) == 1, "a release with assets must cost exactly one request"
+
+
+def test_unreadable_marker_falls_back_to_the_stub() -> None:
+    """A broken marker must not raise: the caller reports 'no asset matching'."""
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        if url.endswith("/releases/latest"):
+            return _FakeResponse(_stub_release())
+        if "nightly-tag.txt" in url:
+            raise httpx.ConnectError("boom")
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("ggml-org/llama.cpp")["tag_name"] == "v0.5.0"
+
+
+def test_empty_marker_falls_back_to_the_stub() -> None:
+    """A blank marker names no tag, so there is nothing to resolve."""
+
+    def _get(url: str, **kwargs: object) -> _FakeResponse:
+        if url.endswith("/releases/latest"):
+            return _FakeResponse(_stub_release())
+        if "nightly-tag.txt" in url:
+            return _MarkerResponse("   \n")
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
+        assert latest_release("ggml-org/llama.cpp")["tag_name"] == "v0.5.0"
 
 
 def test_update_drops_the_cached_release(tmp_path: Path) -> None:
