@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from llamagui.backends.prebuilt import (
+from app.backends.prebuilt import (
     PrebuiltError,
     PrebuiltUnavailable,
     _is_readable_archive,
@@ -31,8 +31,8 @@ from llamagui.backends.prebuilt import (
     set_progress_callback,
     wipe_and_extract,
 )
-from llamagui.models import get_backend
-from llamagui.paths import arch_key, platform_key
+from app.models import get_backend
+from app.paths import arch_key, platform_key
 
 _PLATFORM = platform_key()
 _ARCH = arch_key()
@@ -274,7 +274,7 @@ def test_unsupported_archive_format(tmp_path: Path) -> None:
 def test_wipe_and_extract_emits_byte_progress(tmp_path: Path) -> None:
     # Regression: extraction must report real, moving byte progress (not a
     # frozen bar) and map it into the caller's overall window.
-    import llamagui.backends.prebuilt as pb
+    import app.backends.prebuilt as pb
 
     archive = tmp_path / "release.zip"
     _make_zip(
@@ -333,7 +333,7 @@ def test_cached_download_reuses_matching_size(tmp_path: Path) -> None:
     def _record(url: str, *args: Any, **kwargs: Any) -> None:
         downloaded.append(url)
 
-    with patch("llamagui.backends.prebuilt.download_file", side_effect=_record):
+    with patch("app.backends.prebuilt.download_file", side_effect=_record):
         result = cached_download(
             "https://example.com/existing.zip", len(payload), cache_dir
         )
@@ -361,7 +361,7 @@ def test_cached_download_redownloads_a_corrupt_cache_hit(tmp_path: Path) -> None
     def fake_download(url: str, dest: Path, token: Any = None, **kw: Any) -> None:
         dest.write_bytes(fresh)
 
-    with patch("llamagui.backends.prebuilt.download_file", side_effect=fake_download):
+    with patch("app.backends.prebuilt.download_file", side_effect=fake_download):
         result = cached_download("https://example.com/asset.zip", len(fresh), cache_dir)
 
     assert result.read_bytes() == fresh
@@ -395,7 +395,7 @@ def test_cached_download_redownloads_a_corrupt_tar_gz(tmp_path: Path) -> None:
     def fake_download(url: str, dest: Path, token: Any = None, **kw: Any) -> None:
         dest.write_bytes(full)
 
-    with patch("llamagui.backends.prebuilt.download_file", side_effect=fake_download):
+    with patch("app.backends.prebuilt.download_file", side_effect=fake_download):
         result = cached_download(
             "https://example.com/asset.tar.gz", len(full), cache_dir
         )
@@ -414,7 +414,7 @@ def test_cached_download_redownloads_on_size_mismatch(tmp_path: Path) -> None:
     def fake_download(url: str, dest: Path, token: Any = None, **kw: Any) -> None:
         dest.write_bytes(b"0123456789")
 
-    with patch("llamagui.backends.prebuilt.download_file", side_effect=fake_download):
+    with patch("app.backends.prebuilt.download_file", side_effect=fake_download):
         result = cached_download("https://example.com/asset.zip", 10, cache_dir)
     assert result.read_bytes() == b"0123456789"
 
@@ -422,9 +422,9 @@ def test_cached_download_redownloads_on_size_mismatch(tmp_path: Path) -> None:
 # ─── Install ──────────────────────────────────────────────────────────────
 
 
-@patch("llamagui.backends.prebuilt.latest_release")
-@patch("llamagui.backends.prebuilt.cached_download")
-@patch("llamagui.backends.prebuilt.wipe_and_extract")
+@patch("app.backends.prebuilt.latest_release")
+@patch("app.backends.prebuilt.cached_download")
+@patch("app.backends.prebuilt.wipe_and_extract")
 def test_install_backend_writes_marker(
     mock_wipe: MagicMock,
     mock_dl: MagicMock,
@@ -447,7 +447,7 @@ def test_install_backend_writes_marker(
     assert installed_backends(tmp_path / "managed") == {backend: "b10331"}
 
 
-@patch("llamagui.backends.prebuilt.latest_release")
+@patch("app.backends.prebuilt.latest_release")
 def test_install_backend_is_idempotent(mock_release: MagicMock, tmp_path: Path) -> None:
     mock_release.return_value = fake_release()
     managed = tmp_path / "managed"
@@ -473,10 +473,10 @@ def test_install_backend_unavailable_on_this_platform(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _IS_WINDOWS, reason="cudart packs are Windows-only")
-@patch("llamagui.backends.prebuilt.latest_release")
-@patch("llamagui.backends.prebuilt.cached_download")
-@patch("llamagui.backends.prebuilt.wipe_and_extract")
-@patch("llamagui.backends.prebuilt._extract_cudart")
+@patch("app.backends.prebuilt.latest_release")
+@patch("app.backends.prebuilt.cached_download")
+@patch("app.backends.prebuilt.wipe_and_extract")
+@patch("app.backends.prebuilt._extract_cudart")
 def test_cuda12_fetches_its_runtime_pack(
     mock_cudart: MagicMock,
     mock_wipe: MagicMock,
@@ -494,10 +494,10 @@ def test_cuda12_fetches_its_runtime_pack(
 
 
 @pytest.mark.skipif(not _IS_WINDOWS, reason="cudart packs are Windows-only")
-@patch("llamagui.backends.prebuilt.latest_release")
-@patch("llamagui.backends.prebuilt.cached_download")
-@patch("llamagui.backends.prebuilt.wipe_and_extract")
-@patch("llamagui.backends.prebuilt._extract_cudart")
+@patch("app.backends.prebuilt.latest_release")
+@patch("app.backends.prebuilt.cached_download")
+@patch("app.backends.prebuilt.wipe_and_extract")
+@patch("app.backends.prebuilt._extract_cudart")
 def test_cuda13_runtime_pack_is_opt_in(
     mock_cudart: MagicMock,
     mock_wipe: MagicMock,
@@ -557,8 +557,8 @@ def test_download_emits_progress_without_content_length(tmp_path: Path) -> None:
             yield b"world"
 
     with (
-        patch("llamagui.backends.prebuilt.httpx.stream", return_value=_Resp()),
-        patch("llamagui.backends.prebuilt.emit_progress", side_effect=_record),
+        patch("app.backends.prebuilt.httpx.stream", return_value=_Resp()),
+        patch("app.backends.prebuilt.emit_progress", side_effect=_record),
     ):
         download_file("https://example.com/x", tmp_path / "out.bin")
 
@@ -601,7 +601,7 @@ def test_release_is_cached_within_the_ttl() -> None:
         calls.append(url)
         return _FakeResponse({"tag_name": "b1"})
 
-    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
         assert latest_release("o/r")["tag_name"] == "b1"
         assert latest_release("o/r")["tag_name"] == "b1"
         assert latest_release("o/r")["tag_name"] == "b1"
@@ -620,8 +620,8 @@ def test_release_refetches_after_the_ttl() -> None:
         return _FakeResponse({"tag_name": f"b{len(calls)}"})
 
     with (
-        patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get),
-        patch("llamagui.backends.prebuilt.RELEASE_CACHE_TTL", 0.0),
+        patch("app.backends.prebuilt.httpx.get", side_effect=_get),
+        patch("app.backends.prebuilt.RELEASE_CACHE_TTL", 0.0),
     ):
         assert latest_release("o/r")["tag_name"] == "b1"
         assert latest_release("o/r")["tag_name"] == "b2"
@@ -636,7 +636,7 @@ def test_clear_release_cache_forces_a_refetch() -> None:
         calls.append(url)
         return _FakeResponse({"tag_name": f"b{len(calls)}"})
 
-    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
         assert latest_release("o/r")["tag_name"] == "b1"
         clear_release_cache()
         assert latest_release("o/r")["tag_name"] == "b2"
@@ -654,7 +654,7 @@ def test_cache_is_keyed_per_repo_and_token() -> None:
         calls.append(repo)
         return _FakeResponse({"tag_name": repo})
 
-    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
         assert latest_release("o/one")["tag_name"] == "o/one"
         assert latest_release("o/two")["tag_name"] == "o/two"
         assert latest_release("o/one", "tok")["tag_name"] == "o/one"
@@ -669,9 +669,9 @@ def test_cache_is_keyed_per_repo_and_token() -> None:
 def test_update_drops_the_cached_release(tmp_path: Path) -> None:
     """``update`` is an explicit request for the newest release, so it must
     not resolve the metadata cached at startup."""
-    from llamagui.config import AppConfig
-    from llamagui.orchestrator import Orchestrator
-    from llamagui.schemas import EngineError
+    from app.config import AppConfig
+    from app.orchestrator import Orchestrator
+    from app.schemas import EngineError
 
     calls: list[str] = []
 
@@ -682,7 +682,7 @@ def test_update_drops_the_cached_release(tmp_path: Path) -> None:
     # Seed the cache, then confirm update() re-fetches rather than reusing it.
     # The empty asset list makes the run fail (no asset matches the backend),
     # which is fine: only the fetch behaviour is under test.
-    with patch("llamagui.backends.prebuilt.httpx.get", side_effect=_get):
+    with patch("app.backends.prebuilt.httpx.get", side_effect=_get):
         latest_release("ggml-org/llama.cpp")
         before = len(calls)
         with pytest.raises((EngineError, PrebuiltError)):

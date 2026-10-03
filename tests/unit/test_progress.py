@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from llamagui.models import parse_progress_line
+from app.models import parse_progress_line
 
 
 def test_parse_valid_line() -> None:

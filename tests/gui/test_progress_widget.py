@@ -11,8 +11,8 @@ from typing import Any
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.theme import COLORS
-from llamagui.gui.widgets.progress_bar import ProgressWidget, _fmt_duration, _human
+from app.gui.theme import COLORS
+from app.gui.widgets.progress_bar import ProgressWidget, _fmt_duration, _human
 
 
 def test_hidden_until_started(qtbot: QtBot) -> None:

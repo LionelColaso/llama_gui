@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from llamagui import paths
+from app import paths
 
 
 def test_platform_key_is_one_of_three() -> None:

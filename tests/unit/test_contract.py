@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from llamagui.schemas import (
+from app.schemas import (
     Envelope,
     ExitCode,
     contract_version,
@@ -66,7 +66,7 @@ def test_envelope_json_roundtrip() -> None:
 
 
 def test_envelope_data_status() -> None:
-    from llamagui.schemas import BackendStatusData, StatusData
+    from app.schemas import BackendStatusData, StatusData
 
     sd = StatusData(
         backends={
@@ -100,8 +100,8 @@ def test_cli_describe_json_envelope_matches_schema(
     import io
     import json
 
-    from llamagui.cli import main as cli_main
-    from llamagui.schemas import DescribeData
+    from app.cli import main as cli_main
+    from app.schemas import DescribeData
 
     buf = io.StringIO()
     monkeypatch.chdir(tmp_path)

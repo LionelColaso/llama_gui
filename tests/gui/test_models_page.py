@@ -8,8 +8,8 @@ import pytest
 from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.pages.models import ModelsPage
-from llamagui.gui.widgets.model_table import ModelTable
+from app.gui.pages.models import ModelsPage
+from app.gui.widgets.model_table import ModelTable
 
 
 def _item_text(table: ModelTable, row: int, col: int) -> str:
@@ -25,7 +25,7 @@ def _stub_resume_question(monkeypatch: pytest.MonkeyPatch, asked: list[bool]) ->
         asked.append(True)
         return QMessageBox.StandardButton.No
 
-    monkeypatch.setattr("llamagui.gui.pages.models.QMessageBox.question", _question)
+    monkeypatch.setattr("app.gui.pages.models.QMessageBox.question", _question)
 
 
 class TestModelsPage:

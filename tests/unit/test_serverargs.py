@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 
 import pytest
 
-from llamagui.serverargs import (
+from app.serverargs import (
     DEDICATED_FLAGS,
     SECTIONS,
     SERVER_ARGS,

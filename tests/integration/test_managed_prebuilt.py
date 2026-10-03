@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from llamagui.backends.prebuilt import (
+from app.backends.prebuilt import (
     install_backend,
     list_assets,
 )
-from llamagui.cli import main
-from llamagui.models import platform_backend_names
+from app.cli import main
+from app.models import platform_backend_names
 
 pytestmark = pytest.mark.integration
 

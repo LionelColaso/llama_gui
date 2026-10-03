@@ -1,6 +1,6 @@
 # TODO — bugs, correctness gaps and improvements
 
-Findings from a full read of `llamagui/` + `tests/` + `scripts/` + CI config,
+Findings from a full read of `app/` + `tests/` + `scripts/` + CI config,
 with `just check` verified green (ruff, mypy, pyright, jscpd, 410 passed /
 5 skipped).
 

@@ -1,6 +1,6 @@
 """Server options page — a typed editor for every ``llama-server`` option.
 
-The page is data-driven from :mod:`llamagui.serverargs`: one row per catalogue
+The page is data-driven from :mod:`app.serverargs`: one row per catalogue
 option (248 flags as of llama-server b10488), each with the right editor for
 its kind — on/off combo for booleans, choice combo, text or path with browse.
 A live command-line preview shows exactly what ``launch`` will run, and Save

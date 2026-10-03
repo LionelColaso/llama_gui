@@ -6,7 +6,7 @@ set shell := ["cmd.exe", "/C"]
 # Shared flag values to keep recipes DRY and consistent.
 config_and_path := "--config pyproject.toml ."
 pytest_opts := "-m \"not integration\" --no-qt-log -s"
-cov_opts := "--cov=llamagui --cov-report=xml --cov-report=html --cov-report=term-missing --junitxml=junit/test-results.xml"
+cov_opts := "--cov=app --cov-report=xml --cov-report=html --cov-report=term-missing --junitxml=junit/test-results.xml"
 
 # ─── Default Target ──────────────────────────────────────────────────────
 default: check
@@ -17,7 +17,7 @@ default: check
 
 # Run the llama-gui application (GUI by default, CLI with args)
 run:
-    uv run python -m llamagui
+    uv run python -m app
 
 # Run all tests (unit + gui, skip integration)
 test: dev-setup

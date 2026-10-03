@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from llamagui.lifecycle import (
+from app.lifecycle import (
     check_port,
     read_active_backend,
     read_component_version,

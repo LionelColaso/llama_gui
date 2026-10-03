@@ -69,8 +69,8 @@ def _build_nuitka_command(product_version: str = "", dev: bool = False) -> list[
         pass
 
     # Compile the package directory with --python-flag=-m so the built
-    # executable behaves like `python -m llamagui` (correct relative imports).
-    args.append(str(ROOT / "llamagui"))
+    # executable behaves like `python -m app` (correct relative imports).
+    args.append(str(ROOT / "app"))
     return args
 
 
@@ -99,19 +99,19 @@ def _find_built_exe() -> Path | None:
     """Locate the built executable across standalone folder and macOS .app bundle.
 
     Nuitka names the standalone output directory after the compiled top-level
-    package (``llamagui`` -> ``llamagui.dist``), not after --output-filename.
+    package (``app`` -> ``app.dist``), not after --output-filename.
     """
     if platform.system() == "Windows":
-        exe = OUT_DIR / "llamagui.dist" / "llama-gui.exe"
+        exe = OUT_DIR / "app.dist" / "llama-gui.exe"
         return exe if exe.is_file() else None
     if platform.system() == "Darwin":
         bundle = OUT_DIR / "llama-gui.app"
         if bundle.is_dir():
             macos_exe = bundle / "Contents" / "MacOS" / "llama-gui"
             return macos_exe if macos_exe.is_file() else None
-        standalone = OUT_DIR / "llamagui.dist" / "llama-gui"
+        standalone = OUT_DIR / "app.dist" / "llama-gui"
         return standalone if standalone.is_file() else None
-    standalone = OUT_DIR / "llamagui.dist" / "llama-gui"
+    standalone = OUT_DIR / "app.dist" / "llama-gui"
     return standalone if standalone.is_file() else None
 
 

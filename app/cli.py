@@ -1,4 +1,4 @@
-"""Machine interface: ``python -m llamagui <action> [--json]``.
+"""Machine interface: ``python -m app <action> [--json]``.
 
 With ``--json`` stdout carries exactly one envelope (§9.1) and nothing else;
 progress and human logs always go to stderr. The exit code is the contract

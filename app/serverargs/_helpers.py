@@ -24,7 +24,7 @@ def options_to_cli(options: Mapping[str, str]) -> list[str]:
     """Serialize a ``{flag: value}`` map to CLI tokens (catalogue order).
 
     Dedicated flags (``--host``/``--port``/``--ctx-size``/``--n-gpu-layers``)
-    are skipped — :func:`llamagui.lifecycle.build_llama_server_args` emits them
+    are skipped — :func:`app.lifecycle.build_llama_server_args` emits them
     from the dedicated config fields so there is a single source of truth.
     Blank values are ignored (the flag is omitted so the binary default wins).
     """

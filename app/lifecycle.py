@@ -181,7 +181,7 @@ def build_llama_server_args(
 
     Order: the app-managed flags (``-m``, ``--host``, ``--port``, ``-c``,
     ``-ngl``), then every catalogue option the user set (stable order, see
-    :func:`llamagui.serverargs.options_to_cli`), then any raw ``extra_args``
+    :func:`app.serverargs.options_to_cli`), then any raw ``extra_args``
     last so an explicit flag can still override a generated one.
     """
     cmd = [

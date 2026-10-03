@@ -5,7 +5,7 @@ A thin state machine around a :class:`QProgressBar`. Callers drive it with
 :meth:`~.finish_operation` and :meth:`~.fail_operation`. The base look (rounded
 surface track, accent fill, centered muted text) comes from the theme's
 ``QProgressBar`` rule; this widget only layers a semantic danger fill on top for
-the failure state, reading the color from :data:`llamagui.gui.theme.COLORS` as
+the failure state, reading the color from :data:`app.gui.theme.COLORS` as
 the one place a widget-level color is genuinely needed.
 
 The engine feeds :meth:`update_progress` with ``(done, total, phase, overall)``:
@@ -137,7 +137,7 @@ class ProgressWidget(QWidget):
     ) -> None:
         """Show the bar in the indeterminate (busy) state for a new operation.
 
-        Pass a :class:`~llamagui.download.DownloadControl` to expose Pause /
+        Pass a :class:`~app.download.DownloadControl` to expose Pause /
         Resume / Cancel buttons that drive a resumable download.
         """
         self._clear_error_style()

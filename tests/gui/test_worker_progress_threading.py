@@ -15,9 +15,9 @@ from typing import cast
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.backends.prebuilt import emit_progress
-from llamagui.gui.worker_pool import EngineWorker, WorkerPool
-from llamagui.orchestrator import Orchestrator
+from app.backends.prebuilt import emit_progress
+from app.gui.worker_pool import EngineWorker, WorkerPool
+from app.orchestrator import Orchestrator
 
 
 class _ProbeOrch:
@@ -100,7 +100,7 @@ def test_gui_action_names_are_not_mistaken_for_typos() -> None:
     several methods (log_tail, set_active_model) are not CLI actions at all.
     Validating against ACTIONS would have broken seven real GUI actions.
     """
-    from llamagui.orchestrator import ACTIONS, Orchestrator
+    from app.orchestrator import ACTIONS, Orchestrator
 
     gui_actions = [
         "list_models",

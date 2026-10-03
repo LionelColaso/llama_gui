@@ -10,11 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from llamagui.config import AppConfig
-from llamagui.locking import LockAcquisitionError, mutation_lock
-from llamagui.orchestrator import Orchestrator
-from llamagui.resolver import ResolvedBinary
-from llamagui.schemas import EngineError, InstallResultItem
+from app.config import AppConfig
+from app.locking import LockAcquisitionError, mutation_lock
+from app.orchestrator import Orchestrator
+from app.resolver import ResolvedBinary
+from app.schemas import EngineError, InstallResultItem
 
 _SYSTEM = _platform.system().lower()
 _EXE_SUFFIX = ".exe" if _SYSTEM == "windows" else ""
@@ -51,7 +51,7 @@ def _resolved(path: str | None, valid: bool) -> ResolvedBinary:
 def test_first_run_needed_when_nothing_resolves(tmp_path: Path) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved(None, False),
     ):
         assert orch.first_run_needed() is True
@@ -67,7 +67,7 @@ def test_first_run_needed_when_binary_exists_but_cannot_run(tmp_path: Path) -> N
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     exists_but_broken = "/does/not/matter/llama-server"
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved(exists_but_broken, False),
     ):
         assert orch.first_run_needed() is True
@@ -76,7 +76,7 @@ def test_first_run_needed_when_binary_exists_but_cannot_run(tmp_path: Path) -> N
 def test_first_run_not_needed_for_a_working_binary(tmp_path: Path) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved("/x/llama-server", True),
     ):
         assert orch.first_run_needed() is False
@@ -90,7 +90,7 @@ def test_first_run_not_needed_once_complete(tmp_path: Path) -> None:
     def _boom(*args: object, **kwargs: object) -> ResolvedBinary:
         raise AssertionError("first_run_needed must not probe once complete")
 
-    with patch("llamagui.orchestrator.resolve_llama_server", _boom):
+    with patch("app.orchestrator.resolve_llama_server", _boom):
         assert orch.first_run_needed() is False
 
 
@@ -101,7 +101,7 @@ def test_first_run_needed_survives_a_probe_error(tmp_path: Path) -> None:
     def _boom(*args: object, **kwargs: object) -> ResolvedBinary:
         raise RuntimeError("probe exploded")
 
-    with patch("llamagui.orchestrator.resolve_llama_server", _boom):
+    with patch("app.orchestrator.resolve_llama_server", _boom):
         assert orch.first_run_needed() is True
 
 
@@ -159,7 +159,7 @@ def test_status_resolved_matches_dashboard_contract(tmp_path: Path) -> None:
     cfg = AppConfig(root=str(tmp_path), use_os_llama_server=True)
     orch = Orchestrator(cfg)
     server = str(bin_dir / f"llama-server{_EXE_SUFFIX}")
-    with patch("llamagui.resolver.shutil.which", return_value=server):
+    with patch("app.resolver.shutil.which", return_value=server):
         s = orch.status()
 
     assert set(s.resolved.keys()) == {"llama_server"}
@@ -174,7 +174,7 @@ def test_resolve_invalid(tmp_path: Path) -> None:
     orch = Orchestrator(cfg)
     # Isolate from any binaries actually installed on the host (e.g. on PATH),
     # so resolution deterministically fails to find a usable llama-server.
-    with patch("llamagui.resolver.shutil.which", return_value=None):
+    with patch("app.resolver.shutil.which", return_value=None):
         r = orch.resolve()
     assert r.llama_server.valid is False
     assert r.llama_server.path is None
@@ -244,8 +244,8 @@ def _prebuilt_capable_backend() -> str:
     The "No asset matching" path runs the prebuilt download, so we need a
     backend whose asset pattern exists for this platform.
     """
-    from llamagui.models import BACKENDS
-    from llamagui.paths import platform_key
+    from app.models import BACKENDS
+    from app.paths import platform_key
 
     plat = platform_key()
     for b in BACKENDS:
@@ -263,9 +263,7 @@ def _assert_install_fails_no_asset(
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)
     with (
-        patch(
-            "llamagui.backends.prebuilt.latest_release", return_value=_empty_release()
-        ),
+        patch("app.backends.prebuilt.latest_release", return_value=_empty_release()),
         pytest.raises(Exception, match="No asset matching"),
     ):
         method = getattr(orch, action)
@@ -363,10 +361,10 @@ def _launch_patches(
         return {"stopped_pids": [], "port_free": True, "still_listening": False}
 
     return [
-        patch("llamagui.orchestrator.resolve_llama_server", return_value=resolved),
-        patch("llamagui.orchestrator.check_port", return_value=False),
-        patch("llamagui.orchestrator.launch_llama_server", side_effect=_spawn),
-        patch("llamagui.orchestrator.stop_processes", side_effect=_stop),
+        patch("app.orchestrator.resolve_llama_server", return_value=resolved),
+        patch("app.orchestrator.check_port", return_value=False),
+        patch("app.orchestrator.launch_llama_server", side_effect=_spawn),
+        patch("app.orchestrator.stop_processes", side_effect=_stop),
         patch.object(orch, "_resolve_model_path", return_value=orch.root / "m.gguf"),
         patch.object(orch, "_server_args_for", return_value=["llama-server"]),
     ]
@@ -399,7 +397,7 @@ def test_stop_holds_the_mutation_lock(tmp_path: Path) -> None:
         spy.sample()
         return {"stopped_pids": [], "port_free": True, "still_listening": False}
 
-    with patch("llamagui.orchestrator.stop_processes", side_effect=_stop):
+    with patch("app.orchestrator.stop_processes", side_effect=_stop):
         orch.stop()
     seen.extend(spy.observed)
     assert seen == [True], "stop terminated processes without the lock held"
@@ -456,7 +454,7 @@ def test_restart_does_not_reenter_the_lock(tmp_path: Path) -> None:
     with contextlib.ExitStack() as stack:
         for ctx in _launch_patches(orch, spy):
             stack.enter_context(ctx)
-        stack.enter_context(patch("llamagui.orchestrator.mutation_lock", _counting))
+        stack.enter_context(patch("app.orchestrator.mutation_lock", _counting))
         pid = orch.restart()
 
     assert pid == 4242
@@ -475,7 +473,7 @@ def _row(result: dict[str, Any], index: int = 0) -> dict[str, Any]:
 
 
 def test_describe_server_args_lists_the_whole_catalogue(tmp_path: Path) -> None:
-    from llamagui.serverargs import SERVER_ARGS
+    from app.serverargs import SERVER_ARGS
 
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     result = orch.describe_server_args()
@@ -642,8 +640,8 @@ def test_update_skips_when_already_current(tmp_path: Path) -> None:
     cfg = AppConfig(root=str(tmp_path))
     orch = Orchestrator(cfg)
     with (
-        patch("llamagui.backends.prebuilt.latest_release", return_value=release),
-        patch("llamagui.orchestrator.clear_release_cache") as mock_clear,
+        patch("app.backends.prebuilt.latest_release", return_value=release),
+        patch("app.orchestrator.clear_release_cache") as mock_clear,
     ):
         result = orch.update([backend], force=False)
 
@@ -656,8 +654,8 @@ def test_update_skips_when_already_current(tmp_path: Path) -> None:
 def _patch_update(
     backend: str, version: str = "b10331", bytes: int = 0
 ) -> tuple[MagicMock, MagicMock]:
-    mock_clear = patch("llamagui.orchestrator.clear_release_cache").start()
-    mock_obtain = patch("llamagui.orchestrator.Orchestrator._obtain_backend").start()
+    mock_clear = patch("app.orchestrator.clear_release_cache").start()
+    mock_obtain = patch("app.orchestrator.Orchestrator._obtain_backend").start()
     mock_obtain.return_value = InstallResultItem(
         name=backend, status="ok", version=version, bytes=bytes
     )

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from llamagui.config import AppConfig, config_file
+from app.config import AppConfig, config_file
 
 
 def test_save_then_load_round_trips(tmp_path: Path) -> None:
@@ -95,7 +95,7 @@ def test_default_config_path_is_inside_tmp_path(tmp_path: Path) -> None:
 
 def test_default_root_is_inside_tmp_path(tmp_path: Path) -> None:
     """The managed root must not be the developer's real ~/.llamagui either."""
-    from llamagui.paths import default_root
+    from app.paths import default_root
 
     root = default_root()
     assert str(root).startswith(str(tmp_path)), (

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.pages.backends import BackendsPage
+from app.gui.pages.backends import BackendsPage
 
 
 def test_busy_guard_prevents_worker_pileup(qtbot: QtBot, fake_orch: MagicMock) -> None:

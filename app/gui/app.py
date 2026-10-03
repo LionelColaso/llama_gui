@@ -14,7 +14,7 @@ from .theme import apply_theme
 
 def run() -> None:
     # Reconfigure here (idempotent) so the GUI also logs when entered via
-    # ``llamagui gui`` or an embedded call that skipped ``__main__``; stderr
+    # ``app gui`` or an embedded call that skipped ``__main__``; stderr
     # mirroring helps when the app was launched from a terminal.
     configure_logging(default_root() / "logs", to_stderr=True)
     install_excepthook()

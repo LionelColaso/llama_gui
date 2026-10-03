@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from llamagui import model_store
-from llamagui.model_store import (
+from app import model_store
+from app.model_store import (
     ModelDownloadError,
     list_models,
     model_name_from_url,

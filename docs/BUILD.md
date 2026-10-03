@@ -120,12 +120,12 @@ just build-version 0.1.0.0
 
 ```bash
 # Launch GUI
-uv run python -m llamagui
+uv run python -m app
 
 # CLI commands
-uv run python -m llamagui describe --json
-uv run python -m llamagui status --json
-uv run python -m llamagui install vulkan --json
+uv run python -m app describe --json
+uv run python -m app status --json
+uv run python -m app install vulkan --json
 ```
 
 ## Testing
@@ -162,7 +162,7 @@ and a manual `release.yml`. `scripts/build.py` is the single build entrypoint
 / `macos-latest`. Runs `scripts/build.py` (Nuitka `--standalone`; macOS
 `--macos-create-app-bundle` → `llama-gui.app`), then a `Find Executable` step,
 a cross-platform smoke test (`describe --json`), and uploads `llama-gui-<os>`
-(`llamagui.dist/` on Linux/Windows, `llama-gui.app` on macOS). Optionally
+(`app.dist/` on Linux/Windows, `llama-gui.app` on macOS). Optionally
 attests the build. `release.yml` and `auto_build.yml` both `uses:` this.
 
 ### `ci.yml` — pull-request gate

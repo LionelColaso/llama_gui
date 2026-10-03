@@ -2,7 +2,7 @@
 
 Durability rules (requirement: "settings must not be lost"):
 
-* The settings file lives in the OS config dir (see :mod:`llamagui.paths`), so
+* The settings file lives in the OS config dir (see :mod:`app.paths`), so
   changing the managed *root* in the UI can never orphan the settings.
 * Writes are atomic (temp file + ``os.replace``) and fsynced, so a crash or a
   power cut can never leave a half-written file.
@@ -73,7 +73,7 @@ class AppConfig:
     #: Extra raw CLI args appended to the llama-server command line.
     extra_server_args: str = ""
     #: Values for the data-driven server-options catalogue: ``{flag: value}``
-    #: (see :mod:`llamagui.serverargs`). A blank/absent value means "leave the
+    #: (see :mod:`app.serverargs`). A blank/absent value means "leave the
     #: flag out and let the binary use its default". Dedicated flags
     #: (``host``/``port``/``ctx_size``/``n_gpu_layers``) are never stored here.
     server_options: dict[str, str] = field(

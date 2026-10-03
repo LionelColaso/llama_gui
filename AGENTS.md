@@ -144,7 +144,7 @@ scoped stop, and the model store.
   `mklink /J` fallback on Windows). Never `powershell.exe` as the engine.
 
 ### 5.3 Machine interface (CLI)
-`python -m llamagui <action> [--json]` emits a single JSON **envelope** (or a
+`python -m app <action> [--json]` emits a single JSON **envelope** (or a
 human-readable summary) with a typed payload and a stable exit code (§11). The
 GUI calls the same `Orchestrator` methods in-process; the CLI is the externally
 drivable surface. `contract_version` is `"4"`.
@@ -186,7 +186,7 @@ drivable surface. `contract_version` is `"4"`.
     `-c <ctx>` (omitted when ctx is `auto`/0 so llama.cpp uses the model
     default), `-ngl <layers>`, plus a free-form *extra server args* string
     appended last. The full option catalogue is **data** in
-    `llamagui/serverargs.py`, consumed by the GUI grid, the CLI
+    `app/serverargs.py`, consumed by the GUI grid, the CLI
     (`server-args` / `set-arg` / `clear-args`) and the command-line builder.
 13. **App errors are always logged.** loguru writes every entry to
     `<data-root>/logs/llamagui.log` (10 MB rotation, 7-day retention, enqueued so
@@ -257,7 +257,7 @@ flat into `managed/<backend>/`, write `.version`. For cuda12, also fetch the
 cudart pack (invariant #11). Optional GitHub token (keyring) for rate limits.
 
 Downloads share the resumable / pausable / cancellable engine in
-`llamagui/download.py` (`.part` file + `.part.meta` sidecar, HTTP `Range` resume,
+`app/download.py` (`.part` file + `.part.meta` sidecar, HTTP `Range` resume,
 exponential backoff on transient failures, pause/resume/cancel via
 `DownloadControl`).
 
@@ -316,7 +316,7 @@ CREATE_NO_WINDOW` + `TerminateProcess`; POSIX `start_new_session` +
 
 ## 11. CLI contract
 
-`python -m llamagui <action> [--json]`. Actions (orchestrator `ACTIONS`):
+`python -m app <action> [--json]`. Actions (orchestrator `ACTIONS`):
 `describe`, `status`, `resolve`, `bootstrap`, `install [backends…] [--force]`,
 `update [backends…] [--force]`, `use <backend> [--auto-install]`,
 `list-models`, `download-model <url>`, `set-model <name>`,
@@ -355,6 +355,14 @@ CREATE_NO_WINDOW` + `TerminateProcess`; POSIX `start_new_session` +
 Authoritative generated tree: [`mapping.md`](mapping.md)
 (regenerate with `uv run python scripts/mapping.py`).
 
+The **import package is `app`**; the **distribution and console script are
+still `llamagui`** (`[project.scripts] llamagui = "app.__main__:main"`, plus
+`[tool.hatch.build.targets.wheel] packages = ["app"]`, since hatchling cannot
+infer `app/` from the project name). User-facing identity is likewise unchanged:
+`APP_NAME`, `%APPDATA%/llamagui`, `~/.llamagui`, `LLAMAGUI_*` env vars and
+`logs/llamagui.log` all keep the `llamagui` name so existing installs are not
+orphaned.
+
 ```
 llama_gui/
 ├── pyproject.toml                 # uv project; deps (no ruamel); check tooling
@@ -363,8 +371,8 @@ llama_gui/
 ├── docs/BUILD.md                  # triple, resolver, cadence, Nuitka notes
 ├── scripts/                       # build.py check.py clean.py mapping.py stats.py
 │                                  #   + check_server_args.py (catalogue vs --help)
-├── llamagui/                      # the engine
-│   ├── __init__.py  __main__.py   # `python -m llamagui` (loguru + excepthook)
+├── app/                          # the engine
+│   ├── __init__.py  __main__.py   # `python -m app` (loguru + excepthook)
 │   ├── applog.py                  # loguru config: rotating file sink + excepthook
 │   ├── cli.py                     # argparse + envelope + exit codes (§11)
 │   ├── config.py                  # AppConfig (JSON, atomic), derived paths
@@ -379,7 +387,7 @@ llama_gui/
 │   ├── locking.py                 # named mutex / lockfile for mutations
 │   ├── download.py                # resumable/pausable/cancellable download engine
 │   └── backends/prebuilt.py       # GitHub release download + cache + .version
-└── llamagui/gui/                  # the PySide6 front-end (§13)
+└── app/gui/                      # the PySide6 front-end (§13)
     ├── app.py  main_window.py     # tray / launch-on-start / start-minimized
     ├── theme.py  token.py         # QSS design system; keyring token
     ├── payload.py                 # worker-result → dict normalisation
@@ -459,7 +467,7 @@ tests/
   (`-m "not integration"`).
 - `scripts/check.py` is a `just`-independent runner for the same checks (it has
   drifted slightly — see TODO.md).
-- `just build` → Nuitka `--standalone` into `build/llamagui.dist/`;
+- `just build` → Nuitka `--standalone` into `build/app.dist/`;
   `just build-version X.Y.Z.W` sets a product version. `scripts/build.py` is the
   single build entrypoint and verifies the artifact with `describe --json`.
 
@@ -498,9 +506,9 @@ stays a stable reference and the work-in-progress list has one home.
 
 **Run / verify:**
 ```bash
-uv run python -m llamagui gui          # launch the GUI
-uv run python -m llamagui status --json
-uv run python -m llamagui list-models
+uv run python -m app gui          # launch the GUI
+uv run python -m app status --json
+uv run python -m app list-models
 just check                             # full check suite (fail-fast)
 uv run python scripts/mapping.py       # regenerate mapping.md
 ```

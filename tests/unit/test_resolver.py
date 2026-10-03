@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from llamagui.config import AppConfig
-from llamagui.models import Source
-from llamagui.resolver import resolve_llama_server
+from app.config import AppConfig
+from app.models import Source
+from app.resolver import resolve_llama_server
 
 
 def _place(stub: Path, directory: Path) -> Path:
@@ -93,7 +93,7 @@ def test_resolve_os_toggle_prefers_path(stub_exe: Path, tmp_path: Path) -> None:
     root = tmp_path / "root"
     _managed_backend(root, stub_exe)
     cfg = AppConfig(root=str(root), default_backend="cpu", use_os_llama_server=True)
-    with patch("llamagui.resolver.shutil.which", return_value=str(stub_exe)):
+    with patch("app.resolver.shutil.which", return_value=str(stub_exe)):
         result = resolve_llama_server(cfg)
     assert result.source is Source.SYSTEM
 
@@ -105,7 +105,7 @@ def test_resolve_os_toggle_falls_back_to_managed(
     root = tmp_path / "root"
     _managed_backend(root, stub_exe)
     cfg = AppConfig(root=str(root), default_backend="cpu", use_os_llama_server=True)
-    with patch("llamagui.resolver.shutil.which", return_value=None):
+    with patch("app.resolver.shutil.which", return_value=None):
         result = resolve_llama_server(cfg)
     assert result.source is Source.MANAGED_PREBUILT
 
@@ -115,7 +115,7 @@ def test_resolve_toggle_off_ignores_path(stub_exe: Path, tmp_path: Path) -> None
     root = tmp_path / "root"
     (root / "managed").mkdir(parents=True)
     cfg = AppConfig(root=str(root), default_backend="cpu")
-    with patch("llamagui.resolver.shutil.which", return_value=str(stub_exe)):
+    with patch("app.resolver.shutil.which", return_value=str(stub_exe)):
         result = resolve_llama_server(cfg)
     assert result.path is None
     assert result.valid is False
@@ -127,7 +127,7 @@ def test_resolve_os_toggle_nothing_available(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "managed").mkdir(parents=True)
     cfg = AppConfig(root=str(root), default_backend="cpu", use_os_llama_server=True)
-    with patch("llamagui.resolver.shutil.which", return_value=None):
+    with patch("app.resolver.shutil.which", return_value=None):
         result = resolve_llama_server(cfg)
     assert result.path is None
     assert result.valid is False
@@ -136,7 +136,7 @@ def test_resolve_os_toggle_nothing_available(tmp_path: Path) -> None:
 
 def test_invalid_exe_reported_valid_false(stub_exe_fail: Path, tmp_path: Path) -> None:
     cfg = AppConfig(root=str(tmp_path / "root"), use_os_llama_server=True)
-    with patch("llamagui.resolver.shutil.which", return_value=str(stub_exe_fail)):
+    with patch("app.resolver.shutil.which", return_value=str(stub_exe_fail)):
         result = resolve_llama_server(cfg)
     assert result.valid is False
 
@@ -150,7 +150,7 @@ def test_resolve_fast_path_skips_validation(
     never blocks on a subprocess (invariant: reads never spawn on the hot path).
     """
     cfg = AppConfig(root=str(tmp_path / "root"), use_os_llama_server=True)
-    with patch("llamagui.resolver.shutil.which", return_value=str(stub_exe_fail)):
+    with patch("app.resolver.shutil.which", return_value=str(stub_exe_fail)):
         result = resolve_llama_server(cfg, validate=False)
     assert result.valid is True
     assert result.path is not None

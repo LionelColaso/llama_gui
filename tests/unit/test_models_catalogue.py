@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from llamagui.models import (
+from app.models import (
     BACKEND_BY_NAME,
     BACKENDS,
     backend_availability,

@@ -4,22 +4,22 @@ from unittest.mock import MagicMock
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.main_window import MainWindow
-from llamagui.gui.pages.backends import BackendsPage
-from llamagui.gui.pages.dashboard import DashboardHome
-from llamagui.gui.pages.downloads import DownloadsPage
-from llamagui.gui.pages.logs import LogsPage
-from llamagui.gui.pages.server_args import ServerArgsPage
-from llamagui.gui.pages.settings import SettingsPage
-from llamagui.gui.widgets.backend_card import BackendCard
-from llamagui.gui.widgets.source_badge import SourceBadge
-from llamagui.schemas import InstallData
+from app.gui.main_window import MainWindow
+from app.gui.pages.backends import BackendsPage
+from app.gui.pages.dashboard import DashboardHome
+from app.gui.pages.downloads import DownloadsPage
+from app.gui.pages.logs import LogsPage
+from app.gui.pages.server_args import ServerArgsPage
+from app.gui.pages.settings import SettingsPage
+from app.gui.widgets.backend_card import BackendCard
+from app.gui.widgets.source_badge import SourceBadge
+from app.schemas import InstallData
 
 
 def test_main_window_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
     from unittest.mock import patch
 
-    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
         w = MainWindow()
         qtbot.addWidget(w)
         assert w.windowTitle() == "llama-gui"
@@ -28,7 +28,7 @@ def test_main_window_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
 def test_navigation_switches_pages(qtbot: QtBot, fake_orch: MagicMock) -> None:
     from unittest.mock import patch
 
-    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
         w = MainWindow()
         qtbot.addWidget(w)
 
@@ -55,7 +55,7 @@ def test_navigation_switches_pages(qtbot: QtBot, fake_orch: MagicMock) -> None:
 def test_dashboard_has_backend_cards(qtbot: QtBot, fake_orch: MagicMock) -> None:
     from unittest.mock import patch
 
-    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
         w = MainWindow()
         qtbot.addWidget(w)
 
@@ -98,7 +98,7 @@ def test_resolver_page_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
 
 
 def test_engine_worker_runs(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    from llamagui.gui.worker_pool import EngineWorker
+    from app.gui.worker_pool import EngineWorker
 
     worker = EngineWorker(fake_orch, "describe")
 
@@ -118,7 +118,7 @@ def test_close_stops_router_and_tears_down(qtbot: QtBot, fake_orch: MagicMock) -
     """
     from unittest.mock import patch
 
-    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
         w = MainWindow()
         qtbot.addWidget(w)
         accepted = w.close()
@@ -132,7 +132,7 @@ def _auto_update_toast_message(
     """Build a MainWindow with a mock tray and return the toast message text."""
     from unittest.mock import patch
 
-    with patch("llamagui.gui.main_window.Orchestrator", return_value=fake_orch):
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
         w = MainWindow()
         qtbot.addWidget(w)
         w._tray = MagicMock()
@@ -143,7 +143,7 @@ def _auto_update_toast_message(
 def test_auto_update_toast_reports_updated_backends(
     qtbot: QtBot, fake_orch: MagicMock
 ) -> None:
-    from llamagui.schemas import InstallData, InstallResultItem
+    from app.schemas import InstallData, InstallResultItem
 
     data = InstallData(
         release="b10331",
@@ -161,7 +161,7 @@ def test_auto_update_toast_reports_updated_backends(
 def test_auto_update_toast_when_nothing_changed(
     qtbot: QtBot, fake_orch: MagicMock
 ) -> None:
-    from llamagui.schemas import InstallData, InstallResultItem
+    from app.schemas import InstallData, InstallResultItem
 
     data = InstallData(
         release="b10331",

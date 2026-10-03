@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llamagui.lifecycle import (
+from app.lifecycle import (
     _TERM_GRACE_SECONDS,
     _pid_exists,
     _read_pids,
@@ -99,8 +99,8 @@ def test_stop_processes_tolerates_malformed_file(fake_root: Path) -> None:
 
 def test_status_tolerates_malformed_pids_file(tmp_path: Path) -> None:
     """The dashboard read path must survive a damaged pid file."""
-    from llamagui.config import AppConfig
-    from llamagui.orchestrator import Orchestrator
+    from app.config import AppConfig
+    from app.orchestrator import Orchestrator
 
     root = tmp_path / "llamagui"
     (root / "state").mkdir(parents=True)
@@ -152,7 +152,7 @@ def test_build_llama_server_args_auto_ctx() -> None:
 
 
 def test_launch_llama_server_with_nonexistent_exe(fake_root: Path) -> None:
-    from llamagui.lifecycle import LifecycleError
+    from app.lifecycle import LifecycleError
 
     with pytest.raises(LifecycleError):
         launch_llama_server(
@@ -229,7 +229,7 @@ def test_stop_with_short_grace_is_fast(fake_root: Path) -> None:
     """
     import time
 
-    from llamagui.lifecycle import _TERM_GRACE_SECONDS
+    from app.lifecycle import _TERM_GRACE_SECONDS
 
     proc = subprocess.Popen(
         [
@@ -269,7 +269,7 @@ class _GraceRecorder:
 
 def _stop_grace_recorder() -> AbstractContextManager[_GraceRecorder]:
     """Patch ``_stop_pid`` so the grace it receives can be inspected."""
-    from llamagui import lifecycle
+    from app import lifecycle
 
     recorder = _GraceRecorder()
     return patch.object(lifecycle, "_stop_pid", recorder)

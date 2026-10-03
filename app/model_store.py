@@ -8,7 +8,7 @@ model that the server would try to load.
 
 Downloads are resumable: an existing ``.part`` file is continued with an HTTP
 ``Range`` request. Progress is forwarded through the same
-:func:`llamagui.backends.prebuilt.emit_progress` channel as backend downloads,
+:func:`app.backends.prebuilt.emit_progress` channel as backend downloads,
 so the GUI progress bar works for both.
 """
 

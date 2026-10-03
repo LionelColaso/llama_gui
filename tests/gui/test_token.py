@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui import token as token_mod
-from llamagui.gui.pages.settings import SettingsPage
+from app.gui import token as token_mod
+from app.gui.pages.settings import SettingsPage
 
 
 class _FakeKeyring:
@@ -157,7 +157,7 @@ def test_settings_clear_token_removes_it(
 def test_settings_validate_reports_a_resolution(
     qtbot: QtBot, fake_orch: MagicMock
 ) -> None:
-    from llamagui.schemas import ResolveData, ResolvedBinaryData
+    from app.schemas import ResolveData, ResolvedBinaryData
 
     fake_orch.resolve.return_value = ResolveData(
         llama_server=ResolvedBinaryData(
@@ -173,7 +173,7 @@ def test_settings_validate_reports_a_resolution(
 def test_settings_validate_reports_a_failure(
     qtbot: QtBot, fake_orch: MagicMock
 ) -> None:
-    from llamagui.schemas import ResolveData, ResolvedBinaryData
+    from app.schemas import ResolveData, ResolvedBinaryData
 
     fake_orch.resolve.return_value = ResolveData(
         llama_server=ResolvedBinaryData(valid=False, error="wrong architecture")

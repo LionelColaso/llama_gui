@@ -60,7 +60,7 @@ jobs:
 
       # scripts/build.py is the single build entrypoint:
       # it runs Nuitka --standalone, excludes type-checker/test tooling, and
-      # produces the platform artifact (llamagui.dist/ or llama-gui.app).
+      # produces the platform artifact (app.dist/ or llama-gui.app).
       - name: Build
         run: uv run --no-dev --group build python scripts/build.py --product-version "0.0.0.0"
         env:

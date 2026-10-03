@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llamagui.cli import main
+from app.cli import main
 
 
 def test_describe_json() -> None:
@@ -84,7 +84,7 @@ def test_use_auto_install_obtains_the_backend(
     network is stubbed here; the live download is covered by the ``integration``
     suite instead.
     """
-    from llamagui.models import platform_backend_names
+    from app.models import platform_backend_names
 
     backend = next(iter(platform_backend_names()), "vulkan")
     assets = [{"name": f"{backend}-asset.zip", "browser_download_url": "https://x/y"}]
@@ -101,10 +101,8 @@ def test_use_auto_install_obtains_the_backend(
         (target / "llama-server").write_text("", encoding="utf-8")
         return None
 
-    monkeypatch.setattr("llamagui.backends.prebuilt.latest_release", fake_release)
-    monkeypatch.setattr(
-        "llamagui.orchestrator.Orchestrator._obtain_backend", fake_obtain
-    )
+    monkeypatch.setattr("app.backends.prebuilt.latest_release", fake_release)
+    monkeypatch.setattr("app.orchestrator.Orchestrator._obtain_backend", fake_obtain)
 
     code = main(["--root", str(tmp_path), "use", backend, "--auto-install", "--json"])
 
@@ -122,7 +120,7 @@ def _envelope_for(exc: Exception, tmp_path: Path) -> dict[str, Any]:
     """Run one CLI action that raises ``exc``, and return its JSON envelope."""
     out = io.StringIO()
     with (
-        patch("llamagui.cli.Orchestrator.status", side_effect=exc),
+        patch("app.cli.Orchestrator.status", side_effect=exc),
         contextlib.redirect_stdout(out),
     ):
         code = main(["--root", str(tmp_path), "status", "--json"])

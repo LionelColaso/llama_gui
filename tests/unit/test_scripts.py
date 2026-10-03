@@ -82,7 +82,8 @@ def test_mapping_generates_a_tree(mapping: ModuleType) -> None:
     assert (ROOT / "mapping.md").is_file()
     text = (ROOT / "mapping.md").read_text(encoding="utf-8")
     assert text.startswith("# Project Structure Map")
-    assert "llamagui" in text
+    assert "app/" in text
+    assert "orchestrator.py" in text
 
 
 def test_mapping_excludes_ignored_paths(mapping: ModuleType) -> None:

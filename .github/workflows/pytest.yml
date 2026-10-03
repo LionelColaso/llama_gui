@@ -44,7 +44,7 @@ jobs:
         run: uv sync --locked --dev
 
       - name: Tests (unit + gui, no integration)
-        run: uv run pytest -m "not integration" -q --cov=llamagui --cov-report=term-missing --cov-report=xml --junitxml=junit/test-results.xml
+        run: uv run pytest -m "not integration" -q --cov=app --cov-report=term-missing --cov-report=xml --junitxml=junit/test-results.xml
 
       - name: Upload coverage reports to Codecov
         if: matrix.os == 'ubuntu-latest'

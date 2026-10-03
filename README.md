@@ -33,14 +33,14 @@ A PySide6 desktop app that drives [`llama-server`](https://github.com/ggml-org/l
 uv sync --locked --dev
 
 # Launch the GUI
-uv run python -m llamagui gui
+uv run python -m app gui
 
 # Or run the CLI
-uv run python -m llamagui describe --json
-uv run python -m llamagui status  --json
-uv run python -m llamagui install        # managed-prebuilt backends
-uv run python -m llamagui launch         # start llama-server with the active model
-uv run python -m llamagui stop
+uv run python -m app describe --json
+uv run python -m app status  --json
+uv run python -m app install        # managed-prebuilt backends
+uv run python -m app launch         # start llama-server with the active model
+uv run python -m app stop
 ```
 
 Other CLI actions: `resolve`, `update`, `use`, `restart`, `list-assets`, `bootstrap`, `config`, and model management: `list-models`, `download-model`, `set-model`, `remove-model`.
@@ -59,7 +59,7 @@ their runtime per the *CUDA runtime* setting (`auto` / `always` / `never`).
 A standalone executable is produced with [Nuitka](https://nuitka.net/):
 
 ```bash
-just build                 # runs checks, then builds into build/llamagui.dist/
+just build                 # runs checks, then builds into build/app.dist/
 just build-version 0.1.0.0 # set a product version
 ```
 

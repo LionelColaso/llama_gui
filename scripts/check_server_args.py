@@ -1,6 +1,6 @@
 """Diff the ``serverargs`` catalogue against a real ``llama-server --help``.
 
-The catalogue in :mod:`llamagui.serverargs` is **data** transcribed from
+The catalogue in :mod:`app.serverargs` is **data** transcribed from
 ``llama-server --help`` (see ``docs/reference/llama-server-help.txt``). llama.cpp
 ships nightly builds whose flags move, so the snapshot can silently go stale: an
 option the GUI renders may no longer exist, or a new one may be missing.
@@ -35,7 +35,7 @@ SNAPSHOT = ROOT / "docs" / "reference" / "llama-server-help.txt"
 
 sys.path.insert(0, str(ROOT))
 
-from llamagui.serverargs import SERVER_ARGS
+from app.serverargs import SERVER_ARGS
 
 #: One entry of a ``--help`` flag column: a leading dash token plus everything
 #: joined to it by ``-``, ``_`` or ``.`` (real flags include names like
@@ -196,7 +196,7 @@ def main() -> int:
         return 0
 
     print(
-        "\nTo resync: edit SERVER_ARGS in llamagui/serverargs.py, refresh "
+        "\nTo resync: edit SERVER_ARGS in app/serverargs.py, refresh "
         "docs/reference/llama-server-help.txt, and re-run this script."
     )
     if dead or (args.strict and missing):

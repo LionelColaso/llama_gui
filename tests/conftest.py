@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from llamagui.applog import configure_logging
+from app.applog import configure_logging
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +36,7 @@ def _isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setattr("llamagui.paths.LEGACY_ROOT", tmp_path / "no-legacy-root")
+    monkeypatch.setattr("app.paths.LEGACY_ROOT", tmp_path / "no-legacy-root")
 
 
 @pytest.fixture(autouse=True)

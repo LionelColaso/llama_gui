@@ -6,7 +6,7 @@ from typing import Any
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.widgets.model_table import ModelTable, _format_size
+from app.gui.widgets.model_table import ModelTable, _format_size
 
 
 def _item_text(table: ModelTable, row: int, col: int) -> str:

@@ -11,8 +11,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from llamagui import download as download_mod
-from llamagui.download import (
+from app import download as download_mod
+from app.download import (
     DownloadControl,
     discard_pending,
     get_download_control,
@@ -117,9 +117,7 @@ def test_transient_failure_retries_then_succeeds(tmp_path: Path) -> None:
         emitted.append(_fmt(component, done, total, phase))
 
     ok = _FakeResp(chunks=(b"hello ", b"world"))
-    with patch(
-        "llamagui.download.httpx.stream", side_effect=[_FailCtx(), ok]
-    ) as stream:
+    with patch("app.download.httpx.stream", side_effect=[_FailCtx(), ok]) as stream:
         out = stream_download(
             "https://example.com/x",
             tmp_path / "out.bin",
@@ -137,7 +135,7 @@ def test_transient_failure_retries_then_succeeds(tmp_path: Path) -> None:
 
 def test_permanent_status_fails_without_retrying(tmp_path: Path) -> None:
     with (
-        patch("llamagui.download.httpx.stream", return_value=_FakeResp(404)) as stream,
+        patch("app.download.httpx.stream", return_value=_FakeResp(404)) as stream,
         pytest.raises(Exception, match="404"),
     ):
         stream_download(
@@ -151,7 +149,7 @@ def test_retries_exhausted_raise(tmp_path: Path) -> None:
 
     with (
         patch(
-            "llamagui.download.httpx.stream",
+            "app.download.httpx.stream",
             side_effect=[_FailCtx(), _FailCtx(), _FailCtx()],
         ),
         pytest.raises(Exception, match="after 3 attempts"),

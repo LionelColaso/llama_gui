@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from llamagui import lifecycle
+from app import lifecycle
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="POSIX session/kill semantics"
@@ -74,7 +74,7 @@ def test_stop_processes_only_kills_recorded_pids(tmp_path: Path) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    from llamagui.lifecycle import _write_pids
+    from app.lifecycle import _write_pids
 
     try:
         _write_pids(tmp_path, {"llama_server": target.pid, "servers": {}})

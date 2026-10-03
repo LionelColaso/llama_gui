@@ -14,11 +14,11 @@ from unittest.mock import MagicMock, patch
 from PySide6.QtWidgets import QDialog
 from pytestqt.qtbot import QtBot
 
-from llamagui.config import AppConfig
-from llamagui.gui.dialogs.first_run import FirstRunDialog
-from llamagui.orchestrator import Orchestrator
-from llamagui.resolver import ResolvedBinary
-from llamagui.schemas import BootstrapData, ResolveData, ResolvedBinaryData
+from app.config import AppConfig
+from app.gui.dialogs.first_run import FirstRunDialog
+from app.orchestrator import Orchestrator
+from app.resolver import ResolvedBinary
+from app.schemas import BootstrapData, ResolveData, ResolvedBinaryData
 
 
 def _resolved(path: str | None, valid: bool) -> ResolvedBinary:
@@ -31,7 +31,7 @@ def _resolved(path: str | None, valid: bool) -> ResolvedBinary:
 def test_dialog_shown_when_nothing_resolves(tmp_path: Any) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved(None, False),
     ):
         assert orch.first_run_needed() is True
@@ -41,7 +41,7 @@ def test_dialog_shown_when_the_binary_cannot_run(tmp_path: Any) -> None:
     """A binary that exists but fails validation must still prompt."""
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved("/x/llama-server", False),
     ):
         assert orch.first_run_needed() is True
@@ -50,7 +50,7 @@ def test_dialog_shown_when_the_binary_cannot_run(tmp_path: Any) -> None:
 def test_dialog_not_shown_for_a_working_binary(tmp_path: Any) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     with patch(
-        "llamagui.orchestrator.resolve_llama_server",
+        "app.orchestrator.resolve_llama_server",
         return_value=_resolved("/x/llama-server", True),
     ):
         assert orch.first_run_needed() is False
@@ -64,7 +64,7 @@ def test_skip_persists_first_run_complete(tmp_path: Any) -> None:
     def _boom(*args: object, **kwargs: object) -> ResolvedBinary:
         raise AssertionError("a completed first run must not probe the binary")
 
-    with patch("llamagui.orchestrator.resolve_llama_server", _boom):
+    with patch("app.orchestrator.resolve_llama_server", _boom):
         assert orch.first_run_needed() is False
 
 

@@ -27,7 +27,7 @@ def _describe_dict() -> dict[str, Any]:
 
 @pytest.fixture
 def fake_orch() -> MagicMock:
-    from llamagui.config import AppConfig
+    from app.config import AppConfig
 
     orch = MagicMock()
     d = _describe_dict()
@@ -61,7 +61,7 @@ def fake_orch() -> MagicMock:
 def _reset_worker_pool(qtbot: QtBot) -> Generator[None, None, None]:
     from PySide6.QtWidgets import QApplication
 
-    from llamagui.gui.worker_pool import WorkerPool
+    from app.gui.worker_pool import WorkerPool
 
     yield
     # Stop dashboard timers to prevent workers from spawning during GC

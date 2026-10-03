@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 from PySide6.QtWidgets import QComboBox, QLineEdit
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.pages.server_args import ServerArgsPage, _PathEdit
-from llamagui.gui.pages.settings import SettingsPage
+from app.gui.pages.server_args import ServerArgsPage, _PathEdit
+from app.gui.pages.settings import SettingsPage
 
 
 def _set_row_value(page: ServerArgsPage, flag: str, value: str) -> None:

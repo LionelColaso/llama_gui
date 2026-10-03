@@ -1,7 +1,7 @@
 """Data-driven catalogue of every ``llama-server`` command-line option.
 
 Public API re-exported from the split catalogue and helpers modules so
-``from llamagui.serverargs import ...`` continues to work unchanged.
+``from app.serverargs import ...`` continues to work unchanged.
 """
 
 from ._catalogue import (

@@ -15,17 +15,6 @@ llama_gui/
 │   └── dependabot.yml
 ├── app/
 │   ├── backends/
-│   └── gui/
-│       ├── dialogs/
-│       ├── pages/
-│       └── widgets/
-├── docs/
-│   ├── reference/
-│   │   └── llama-server-help.txt
-│   └── BUILD.md
-├── junit/
-├── llamagui/
-│   ├── backends/
 │   │   ├── __init__.py
 │   │   └── prebuilt.py
 │   ├── gui/
@@ -75,6 +64,11 @@ llama_gui/
 │   ├── paths.py
 │   ├── resolver.py
 │   └── schemas.py
+├── docs/
+│   ├── reference/
+│   │   └── llama-server-help.txt
+│   └── BUILD.md
+├── junit/
 ├── macos-results/
 ├── scripts/
 │   ├── build.py

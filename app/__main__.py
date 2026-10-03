@@ -3,8 +3,8 @@ from collections.abc import Sequence
 
 from loguru import logger
 
-from llamagui.applog import configure_logging, install_excepthook
-from llamagui.paths import default_root
+from app.applog import configure_logging, install_excepthook
+from app.paths import default_root
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -18,11 +18,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     logger.info("llamagui starting (argv={})", list(argv))
 
     if len(argv) == 0:
-        from llamagui.gui.app import run as run_gui
+        from app.gui.app import run as run_gui
 
         run_gui()
     else:
-        from llamagui.cli import main as cli_main
+        from app.cli import main as cli_main
 
         try:
             code = cli_main(list(argv))

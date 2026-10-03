@@ -7,7 +7,7 @@ from types import TracebackType
 import pytest
 from loguru import logger
 
-from llamagui.applog import configure_logging, install_excepthook
+from app.applog import configure_logging, install_excepthook
 
 
 def test_configure_logging_writes_errors(tmp_path: Path) -> None:
@@ -78,8 +78,8 @@ def test_emit_logs_failed_action(
     path = configure_logging(tmp_path / "logs")
     assert path is not None
 
-    from llamagui.cli import build_env, emit
-    from llamagui.schemas import ExitCode
+    from app.cli import build_env, emit
+    from app.schemas import ExitCode
 
     env = build_env(
         "install",

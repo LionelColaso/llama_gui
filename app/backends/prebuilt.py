@@ -1,7 +1,7 @@
 """Managed-prebuilt source: download official GitHub release binaries.
 
 Works on Windows, Linux and macOS: the asset for the running platform comes
-from the backend catalogue in :mod:`llamagui.models`, and archives are unpacked
+from the backend catalogue in :mod:`app.models`, and archives are unpacked
 in a way that survives POSIX packaging conventions (executable bits, symlinked
 ``libllama.so`` chains) as well as Windows zips.
 """

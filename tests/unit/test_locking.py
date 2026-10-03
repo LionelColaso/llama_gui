@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from llamagui.locking import LockAcquisitionError, _mutex_name_for, mutation_lock
+from app.locking import LockAcquisitionError, _mutex_name_for, mutation_lock
 
 
 def test_same_root_blocks_across_threads(tmp_path: Path) -> None:

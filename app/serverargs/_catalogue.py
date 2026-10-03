@@ -1,7 +1,7 @@
 """Data-driven catalogue of every ``llama-server`` command-line option.
 
 The catalogue is **data, not control flow** (the same principle as the backend
-table in :mod:`llamagui.models`): one :class:`ServerArg` row per option, in the
+table in :mod:`app.models`): one :class:`ServerArg` row per option, in the
 order ``llama-server --help`` prints them. The GUI renders the whole grid from
 this table, the launch code serialises user values to CLI tokens from it, and
 :mod:`scripts.check_server_args` diffs it against a real binary's ``--help`` so

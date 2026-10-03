@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 from pytestqt.qtbot import QtBot
 
-from llamagui.gui.pages.downloads import DownloadsPage
+from app.gui.pages.downloads import DownloadsPage
 
 
 def _task(kind: str, name: str, dest: str, done: int, total: int) -> dict[str, Any]:
