@@ -127,6 +127,15 @@ def _qss(t: _Tokens) -> str:
         color: {t.text_muted};
         font-size: 12px;
     }}
+    /* A heading *inside* a page that already has a PageTitle, e.g. the second
+       card on the Models tab. */
+    QLabel#SectionTitle {{
+        background: transparent;
+        color: {t.text};
+        font-size: 15px;
+        font-weight: 600;
+        padding-bottom: 2px;
+    }}
 
     /* Sidebar navigation ---------------------------------------------------- */
     QWidget#SidebarRoot {{
@@ -205,6 +214,11 @@ def _qss(t: _Tokens) -> str:
         color: {t.text_muted};
         border-color: {t.border};
     }}
+    /* Inside a path row the path itself is the content, so the buttons keep
+       only a light padding instead of eating the field. */
+    QWidget#PathPicker QPushButton {{
+        padding: 4px 8px;
+    }}
 
     /* Group boxes (cards) --------------------------------------------------- */
     QWidget#Card {{
@@ -221,7 +235,7 @@ def _qss(t: _Tokens) -> str:
         border: 1px solid {t.border};
         border-radius: 12px;
         margin-top: 16px;
-        padding: 16px 14px 14px;
+        padding: 14px 10px 10px;
         font-weight: 600;
     }}
     QGroupBox::title {{

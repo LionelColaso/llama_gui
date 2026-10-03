@@ -424,9 +424,10 @@ llama_gui/
     ├── download_actions.py        # download slots shared by a page and a section
     ├── dialogs/first_run.py       # shown when nothing resolves
     ├── dialogs/relocate.py        # offered when a path change would strand data
-    ├── pages/                     # the 5 sidebar pages: dashboard, server_args,
-    │                              #   logs, settings, downloads
-    ├── sections/                  # dashboard panels: backends, models
+    ├── pages/                     # the 5 sidebar pages: dashboard, models,
+    │                              #   server_args, logs, settings
+    ├── sections/                  # panels: backends (dashboard), models +
+    │                              #   downloads (the models tab)
     └── widgets/                   # backend_card, log_view, model_table, path_picker,
                                    #   progress_bar, source_badge
 
@@ -437,17 +438,27 @@ tests/                            # mirrors app/ 1:1 (unit + gui + integration)
 
 ## 13. GUI (PySide6)
 
-- **Sidebar** (5 pages, in order): **Dashboard** → **Server options** → **Logs**
-  → **Settings** → **Downloads**.
-  - *Dashboard* is a single scrolling page that fuses the former overview /
-    Resolver / Actions: a **Backends** section (per-backend cards with
-    install/update/use, source badges, active backend, server-listening badge,
-    and the resolved `llama-server` row showing source / valid / path) followed
-    by a **Models** section (`.gguf` table + download / set-active / delete).
+- **Sidebar** (5 pages, in order): **Dashboard** → **Models** → **Server
+  options** → **Logs** → **Settings**.
+  - *Dashboard* is a single scrolling page about the backend: a **Backends**
+    section (per-backend cards with install/update/use, source badges, active
+    backend, server-listening badge, and the resolved `llama-server` row showing
+    source / valid / path). Models have their own tab.
+  - *Models* is one scrolling tab holding both halves of getting a model: the
+    **library** (`.gguf` table + download / set-active / remove / open folder)
+    above the **Interrupted downloads** rows — every resumable `.part`,
+    models *and* half-downloaded backend archives, each with Resume / Discard.
+    The library and its downloads are one subject, so they share one tab.
   - *Server options* is a searchable, sectioned editor generated from the
     `serverargs` catalogue, with a live command-line preview.
-  - *Downloads* is the hub for every interrupted `.part` (Resume / Discard),
-    including half-downloaded backend archives.
+  - *Settings* is a scrolling page of grouped cards — **Locations** (managed
+    root, backend location, models directory, settings file), **Server** (host,
+    port, default backend, OS `llama-server`, CUDA runtime, *Validate
+    binaries*), **Application** (theme, launch on start, start minimized) and
+    **Updates** (auto-check, interval, GitHub token). Row labels share one
+    fixed column so every input lines up; derived paths are elided with the
+    full value in the tooltip; Save / Reload / progress / status live in a
+    footer **outside** the scroll area, so the actions stay reachable.
 - **Workers:** every mutation runs on a `WorkerPool` `QRunnable`; the UI thread
   never blocks. Progress arrives over the `progress` Qt signal (§6.14).
 - **First run:** when nothing resolves and `first_run_complete` is unset,

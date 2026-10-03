@@ -34,13 +34,16 @@ class PathPicker(QWidget):
         super().__init__(parent)
         self._mode = mode
         self._caption = caption
+        self.setObjectName("PathPicker")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self._edit = QLineEdit()
         self._edit.setPlaceholderText(placeholder)
-        layout.addWidget(self._edit)
+        # Stretch so the path gets every pixel the row has left over, instead of
+        # the surplus sitting as empty space between the field and the buttons.
+        layout.addWidget(self._edit, 1)
 
         self._browse_btn = QPushButton("Browse…")
         self._browse_btn.clicked.connect(self._browse)
@@ -49,6 +52,9 @@ class PathPicker(QWidget):
         self._action_btn: QPushButton | None = None
         if action_label and on_action is not None:
             button = QPushButton(action_label)
+            # Secondary to the field it belongs to, and to the page's one
+            # primary action (Save).
+            button.setObjectName("GhostButton")
             button.clicked.connect(lambda: on_action(self.text()))
             layout.addWidget(button)
             self._action_btn = button

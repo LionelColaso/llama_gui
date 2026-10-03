@@ -26,13 +26,14 @@ llama_gui/
 │   │   ├── pages/
 │   │   │   ├── __init__.py
 │   │   │   ├── dashboard.py
-│   │   │   ├── downloads.py
 │   │   │   ├── logs.py
+│   │   │   ├── models.py
 │   │   │   ├── server_args.py
 │   │   │   └── settings.py
 │   │   ├── sections/
 │   │   │   ├── __init__.py
 │   │   │   ├── backends.py
+│   │   │   ├── downloads.py
 │   │   │   └── models.py
 │   │   ├── widgets/
 │   │   │   ├── __init__.py
@@ -89,10 +90,10 @@ llama_gui/
 │   │   ├── __init__.py
 │   │   ├── conftest.py
 │   │   ├── test_dashboard.py
-│   │   ├── test_downloads_page.py
 │   │   ├── test_first_run.py
 │   │   ├── test_main_window.py
 │   │   ├── test_model_table.py
+│   │   ├── test_models_page.py
 │   │   ├── test_models_section.py
 │   │   ├── test_progress_widget.py
 │   │   ├── test_relocate_dialog.py

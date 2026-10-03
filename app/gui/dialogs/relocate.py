@@ -30,8 +30,6 @@ from PySide6.QtWidgets import (
 from ...schemas import RelocationData, RelocationItem
 from ..theme import COLORS
 
-_MIB = 1024 * 1024
-
 #: Qt property carrying an action choice from a button back to the dialog.
 CHOICE_PROPERTY = "relocateChoice"
 
@@ -39,10 +37,28 @@ CHOICE_PROPERTY = "relocateChoice"
 def _human(size: int) -> str:
     value = float(size)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < _MIB or unit == "TB":
+        if value < 1024 or unit == "TB":
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= _MIB
+        value /= 1024
     return f"{value:.1f} TB"  # pragma: no cover - loop always returns
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _wrapped(label: QLabel) -> QLabel:
+    """Make a label wrap *and* be laid out for the height it wraps to.
+
+    ``setWordWrap`` alone is not enough: without the height-for-width size
+    policy the layout still reserves a single line, so everything past the first
+    line is silently cut off.
+    """
+    label.setWordWrap(True)
+    policy = label.sizePolicy()
+    policy.setHeightForWidth(True)
+    label.setSizePolicy(policy)
+    return label
 
 
 class RelocateDialog(QDialog):
@@ -63,21 +79,21 @@ class RelocateDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        intro = QLabel(
-            "The location changed. Move what is already there to the new "
-            "location, keep a copy of it, or just save the change and leave "
-            "the files where they are."
+        intro = _wrapped(
+            QLabel(
+                "The location changed. Move what is already there to the new "
+                "location, keep a copy of it, or just save the change and leave "
+                "the files where they are."
+            )
         )
-        intro.setWordWrap(True)
         layout.addWidget(intro)
 
         self._checks: dict[str, QCheckBox] = {}
         for item in plan.items:
             layout.addWidget(self._build_row(item))
         for note in plan.notes:
-            label = QLabel(f"Note: {note}")
+            label = _wrapped(QLabel(f"Note: {note}"))
             label.setStyleSheet(f"color: {COLORS['muted']};")
-            label.setWordWrap(True)
             layout.addWidget(label)
 
         buttons = QDialogButtonBox()
@@ -97,6 +113,10 @@ class RelocateDialog(QDialog):
             button = QPushButton(text)
             button.setToolTip(tip)
             button.setDefault(choice == self.MOVE)
+            # One primary action (*Move & save*); the alternatives are ghosts so
+            # the default is unmistakable.
+            if choice != self.MOVE:
+                button.setObjectName("GhostButton")
             button.setProperty(CHOICE_PROPERTY, choice)
             buttons.addButton(button, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
@@ -119,23 +139,26 @@ class RelocateDialog(QDialog):
 
         # Checked by default: moving the data is what the user almost always
         # wants, and a blocked tree clears itself below.
-        check = QCheckBox(f"Move {item.files} file(s), {_human(item.total_bytes)}")
+        check = QCheckBox(
+            f"Move {_plural(item.files, 'file')}, {_human(item.total_bytes)}"
+        )
         check.setChecked(True)
         layout.addWidget(check)
         self._checks[item.label] = check
 
-        paths = QLabel(f"from {item.source}\nto {item.destination}")
+        paths = _wrapped(QLabel(f"from {item.source}\nto {item.destination}"))
         paths.setStyleSheet(f"color: {COLORS['muted']};")
-        paths.setWordWrap(True)
         paths.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # The source and the destination are two deliberate lines, so reserve
+        # two lines even when the layout would otherwise settle for one.
+        paths.setMinimumHeight(2 * paths.fontMetrics().height())
         layout.addWidget(paths)
 
         if item.blocked:
             check.setEnabled(False)
             check.setChecked(False)
-            blocked = QLabel(f"Cannot move: {item.blocked}.")
+            blocked = _wrapped(QLabel(f"Cannot move: {item.blocked}."))
             blocked.setStyleSheet(f"color: {COLORS['warning']};")
-            blocked.setWordWrap(True)
             layout.addWidget(blocked)
         return box
 

@@ -1,5 +1,5 @@
-"""Dashboard home: a single scrolling page that fuses the Backends section (state
-+ actions + resolved binary) and the Models section into one view.
+"""Dashboard home: a single scrolling page with the Backends section (state,
+actions and the resolved binary). Models have their own tab.
 """
 
 from __future__ import annotations
@@ -9,11 +9,15 @@ from typing import Any
 from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
 from ..sections.backends import BackendsSection
-from ..sections.models import ModelsSection
 
 
 class DashboardHome(QScrollArea):
-    """Single scrolling home page with Backends / Models sections."""
+    """Single scrolling home page: the Backends section.
+
+    Models live in their own tab (``pages/models.py``) together with the
+    interrupted-downloads rows; this page stays about the backend and the
+    server it runs.
+    """
 
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -22,7 +26,6 @@ class DashboardHome(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
 
         self.backends = BackendsSection(orch)
-        self.models_section = ModelsSection(orch)
 
         content = QWidget()
         content.setObjectName("DashboardHomeContent")
@@ -30,7 +33,6 @@ class DashboardHome(QScrollArea):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(22)
         layout.addWidget(self.backends)
-        layout.addWidget(self.models_section)
         layout.addStretch()
         self.setWidget(content)
 

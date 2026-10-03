@@ -7,18 +7,22 @@ know about — changing one setting can never lose the others.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -37,55 +41,80 @@ from ..worker_pool import EngineWorker, WorkerPool
 _TOKEN_MASK = "*" * 8
 
 
+def _short_path(path: str, head: int = 2, tail: int = 2) -> str:
+    """Elide the middle of a long path so it fits a form row.
+
+    A derived location (the backend location, the settings file) can be longer
+    than the window; showing ``…\\llama_gui\\managed`` with the full path in the
+    tooltip keeps the row readable and stops the page from demanding a huge
+    minimum width.
+    """
+    parts = Path(path).parts
+    if len(parts) <= head + tail + 1:
+        return str(path)
+    return str(Path(*parts[:head]) / "…" / Path(*parts[-tail:]))
+
+
+def _row_labels(root: QWidget) -> list[QLabel]:
+    """The labels of every form row under ``root``, left column only.
+
+    A ``QFormLayout`` also creates labels for rows added without one, so this
+    picks up the bare checkbox and button rows too and keeps their inputs in the
+    same column as everything else.
+    """
+    labels: list[QLabel] = []
+    for group in root.findChildren(QGroupBox):
+        form = group.layout()
+        if not isinstance(form, QFormLayout):
+            continue
+        for row in range(form.rowCount()):
+            field = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+            widget = field.widget() if field is not None else None
+            if widget is None:
+                continue
+            label = form.labelForField(widget)
+            if isinstance(label, QLabel):
+                labels.append(label)
+    return labels
+
+
 class SettingsPage(QWidget):
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orch = orch
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("Settings")
-        title.setObjectName("PageTitle")
-        layout.addWidget(title)
+        # The form is taller and wider than one screen on a small window, so it
+        # scrolls instead of being squeezed into clipped, unusable rows.
+        outer.addWidget(self._build_scroll(self._build_body()))
 
-        self._config_path_label = QLabel()
-        self._config_path_label.setStyleSheet(f"color: {COLORS['muted']};")
-        self._config_path_label.setWordWrap(True)
-        layout.addWidget(self._config_path_label)
-
-        layout.addWidget(self._build_general_group())
-        layout.addWidget(self._build_paths_group())
-        layout.addWidget(self._build_updates_group())
-
-        btn_row = QHBoxLayout()
+        action_row = QHBoxLayout()
         save_btn = QPushButton("Save settings")
+        save_btn.setToolTip("Write these settings to the config file.")
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(save_btn)
-
-        validate_btn = QPushButton("Validate binaries")
-        validate_btn.clicked.connect(self._validate)
-        btn_row.addWidget(validate_btn)
+        action_row.addWidget(save_btn)
 
         reload_btn = QPushButton("Reload")
+        reload_btn.setObjectName("GhostButton")
+        reload_btn.setToolTip("Discard edits and show the saved settings again.")
         reload_btn.clicked.connect(self._load)
-        btn_row.addWidget(reload_btn)
-
-        clear_token_btn = QPushButton("Clear token")
-        clear_token_btn.clicked.connect(self._clear_token)
-        btn_row.addWidget(clear_token_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        action_row.addWidget(reload_btn)
+        action_row.addStretch()
+        # Outside the scroll area: the actions and their feedback stay reachable
+        # and visible however far down the form the user is.
+        outer.addLayout(action_row)
 
         self._progress = ProgressWidget()
-        layout.addWidget(self._progress)
+        outer.addWidget(self._progress)
 
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
-        layout.addStretch()
+        outer.addWidget(self._status_label)
 
         # Set while a relocation is in flight: the pending settings dict to save
-        # once the move finished, kept here because the worker reports back
+        # once the transfer finished, kept here because the worker reports back
         # through a signal that carries only the engine result.
         self._pending_save: dict[str, Any] | None = None
 
@@ -93,9 +122,79 @@ class SettingsPage(QWidget):
 
     # ─── Form construction ───────────────────────────────────────────────
 
-    def _build_general_group(self) -> QGroupBox:
-        group = QGroupBox("General")
+    @staticmethod
+    def _build_scroll(body: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(body)
+        return scroll
+
+    def _build_body(self) -> QWidget:
+        """The form itself: one card per concern, related settings together."""
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 8)
+
+        title = QLabel("Settings")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        # Every place the app keeps something, editable or derived, in one card:
+        # the two settings that can be relocated are the editable ones and each
+        # carries its own "Use Default" action.
+        layout.addWidget(self._build_locations_group())
+        layout.addWidget(self._build_server_group())
+        layout.addWidget(self._build_app_group())
+        layout.addWidget(self._build_updates_group())
+
+        self._align_label_columns(body)
+        return body
+
+    @staticmethod
+    def _form(group: QGroupBox) -> QFormLayout:
         form = QFormLayout(group)
+        form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        return form
+
+    def _align_label_columns(self, root: QWidget) -> None:
+        """Give every row label the same width so the inputs line up.
+
+        ``QFormLayout`` sizes its label column to the widest label *in that
+        group*, so without this the four groups would each start their inputs at
+        a different x and the page would read as four unrelated forms. Only real
+        row labels count towards the width — a derived value in the field column
+        must not push every input to the right.
+        """
+        labels = _row_labels(root)
+        if not labels:
+            return
+        width = max(label.sizeHint().width() for label in labels) + 8
+        for label in labels:
+            label.setFixedWidth(width)
+
+    @staticmethod
+    def _derived(text: str, tip: str) -> QLabel:
+        """A read-only value row (a location the app derives, not one you set)."""
+        label = QLabel(text)
+        label.setStyleSheet(f"color: {COLORS['muted']};")
+        label.setToolTip(tip)
+        return label
+
+    @staticmethod
+    def _ghost(text: str, tip: str) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("GhostButton")
+        button.setToolTip(tip)
+        return button
+
+    def _build_locations_group(self) -> QGroupBox:
+        group = QGroupBox("Locations")
+        form = self._form(group)
 
         self._root_picker = PathPicker(
             mode="directory",
@@ -105,37 +204,14 @@ class SettingsPage(QWidget):
             on_action=self._use_default_root,
         )
         self._root_picker.setToolTip(
-            "Where llama-server builds are downloaded and installed.\n\n"
+            "Where llama-server backends are downloaded and installed.\n\n"
             "Use Default removes the override and goes back to the platform "
             "location."
         )
         form.addRow("Managed root", self._root_picker)
 
-        self._host_edit = QLineEdit()
-        form.addRow("Host", self._host_edit)
-
-        self._port_spin = QSpinBox()
-        self._port_spin.setRange(1, 65535)
-        form.addRow("Port", self._port_spin)
-
-        self._backend_combo = QComboBox()
-        self._backend_combo.addItems(self._orch.backend_names())
-        form.addRow("Default backend", self._backend_combo)
-
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["system", "light", "dark"])
-        form.addRow("Theme", self._theme_combo)
-
-        self._launch_check = QCheckBox()
-        form.addRow("Launch server on start", self._launch_check)
-
-        self._minimized_check = QCheckBox()
-        form.addRow("Start minimized to tray", self._minimized_check)
-        return group
-
-    def _build_paths_group(self) -> QGroupBox:
-        group = QGroupBox("Paths")
-        form = QFormLayout(group)
+        self._backend_location_label = self._derived("", "")
+        form.addRow("Backend location", self._backend_location_label)
 
         self._models_dir_picker = PathPicker(
             mode="directory",
@@ -151,9 +227,24 @@ class SettingsPage(QWidget):
         )
         form.addRow("Models directory", self._models_dir_picker)
 
-        self._backend_location_label = QLabel()
-        self._backend_location_label.setStyleSheet(f"color: {COLORS['muted']};")
-        form.addRow("Backend location", self._backend_location_label)
+        self._config_path_label = self._derived("", "")
+        form.addRow("Settings file", self._config_path_label)
+        return group
+
+    def _build_server_group(self) -> QGroupBox:
+        group = QGroupBox("Server")
+        form = self._form(group)
+
+        self._host_edit = QLineEdit()
+        form.addRow("Host", self._host_edit)
+
+        self._port_spin = QSpinBox()
+        self._port_spin.setRange(1, 65535)
+        form.addRow("Port", self._port_spin)
+
+        self._backend_combo = QComboBox()
+        self._backend_combo.addItems(self._orch.backend_names())
+        form.addRow("Default backend", self._backend_combo)
 
         self._os_llama_check = QCheckBox("Use OS installed llama.cpp")
         self._os_llama_check.setToolTip(
@@ -164,15 +255,41 @@ class SettingsPage(QWidget):
 
         self._cudart_combo = QComboBox()
         self._cudart_combo.addItems(list(CUDA_RUNTIME_MODES))
-        form.addRow("Bundle CUDA runtime", self._cudart_combo)
+        self._cudart_combo.setToolTip(
+            "Whether the cudart DLLs are bundled next to the backend binary."
+        )
+        form.addRow("CUDA runtime", self._cudart_combo)
+
+        # Validates exactly the choices above, so the button lives with them.
+        validate_btn = self._ghost(
+            "Validate binaries",
+            "Run the resolver to see which llama-server these settings resolve to.",
+        )
+        validate_btn.clicked.connect(self._validate)
+        form.addRow("", validate_btn)
+        return group
+
+    def _build_app_group(self) -> QGroupBox:
+        group = QGroupBox("Application")
+        form = self._form(group)
+
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItems(["system", "light", "dark"])
+        form.addRow("Theme", self._theme_combo)
+
+        self._launch_check = QCheckBox("Launch server on start")
+        form.addRow("", self._launch_check)
+
+        self._minimized_check = QCheckBox("Start minimized to tray")
+        form.addRow("", self._minimized_check)
         return group
 
     def _build_updates_group(self) -> QGroupBox:
         group = QGroupBox("Updates")
-        form = QFormLayout(group)
+        form = self._form(group)
 
-        self._auto_update_check = QCheckBox()
-        form.addRow("Check for updates automatically", self._auto_update_check)
+        self._auto_update_check = QCheckBox("Check for updates automatically")
+        form.addRow("", self._auto_update_check)
 
         self._interval_spin = QSpinBox()
         self._interval_spin.setRange(1, 168)
@@ -181,7 +298,14 @@ class SettingsPage(QWidget):
 
         self._token_edit = QLineEdit()
         self._token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("GitHub token", self._token_edit)
+        clear_token_btn = self._ghost("Clear", "Remove the token from the OS keyring.")
+        clear_token_btn.clicked.connect(self._clear_token)
+        token_row = QWidget()
+        token_layout = QHBoxLayout(token_row)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.addWidget(self._token_edit)
+        token_layout.addWidget(clear_token_btn)
+        form.addRow("GitHub token", token_row)
         return group
 
     # ─── Load / save ─────────────────────────────────────────────────────
@@ -209,7 +333,10 @@ class SettingsPage(QWidget):
             )
         else:
             self._models_dir_picker.setText(cfg.models_dir)
-        self._backend_location_label.setText(f"{cfg.managed_dir} (downloads)")
+        self._backend_location_label.setText(_short_path(cfg.managed_dir))
+        self._backend_location_label.setToolTip(
+            f"Derived from the managed root:\n{cfg.managed_dir}"
+        )
         self._os_llama_check.setChecked(cfg.use_os_llama_server)
         self._cudart_combo.setCurrentText(cfg.bundle_cuda_runtime)
         self._auto_update_check.setChecked(cfg.auto_update)
@@ -219,7 +346,9 @@ class SettingsPage(QWidget):
             self._token_edit.setText(_TOKEN_MASK)
             self._token_edit.setPlaceholderText("stored in the OS keyring")
 
-        self._config_path_label.setText(f"Settings file: {self._config_file()}")
+        config_path = self._config_file()
+        self._config_path_label.setText(_short_path(config_path))
+        self._config_path_label.setToolTip(f"Settings file:\n{config_path}")
         for warning in getattr(cfg, "load_warnings", []):
             self._status_label.setText(str(warning))
 

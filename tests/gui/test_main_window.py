@@ -6,8 +6,8 @@ from pytestqt.qtbot import QtBot
 
 from app.gui.main_window import MainWindow
 from app.gui.pages.dashboard import DashboardHome
-from app.gui.pages.downloads import DownloadsPage
 from app.gui.pages.logs import LogsPage
+from app.gui.pages.models import ModelsPage
 from app.gui.pages.server_args import ServerArgsPage
 from app.gui.pages.settings import SettingsPage
 from app.gui.sections.backends import BackendsSection
@@ -37,19 +37,37 @@ def test_navigation_switches_pages(qtbot: QtBot, fake_orch: MagicMock) -> None:
 
         w._nav.setCurrentRow(1)
         assert w._pages.currentIndex() == 1
-        assert isinstance(w._pages.currentWidget(), ServerArgsPage)
+        assert isinstance(w._pages.currentWidget(), ModelsPage)
 
         w._nav.setCurrentRow(2)
         assert w._pages.currentIndex() == 2
-        assert isinstance(w._pages.currentWidget(), LogsPage)
+        assert isinstance(w._pages.currentWidget(), ServerArgsPage)
 
         w._nav.setCurrentRow(3)
         assert w._pages.currentIndex() == 3
-        assert isinstance(w._pages.currentWidget(), SettingsPage)
+        assert isinstance(w._pages.currentWidget(), LogsPage)
 
         w._nav.setCurrentRow(4)
         assert w._pages.currentIndex() == 4
-        assert isinstance(w._pages.currentWidget(), DownloadsPage)
+        assert isinstance(w._pages.currentWidget(), SettingsPage)
+
+
+def test_models_and_downloads_share_one_tab(qtbot: QtBot, fake_orch: MagicMock) -> None:
+    """The library and its downloads are one tab, not two (regression)."""
+    from unittest.mock import patch
+
+    with patch("app.gui.main_window.Orchestrator", return_value=fake_orch):
+        w = MainWindow()
+        qtbot.addWidget(w)
+
+    labels = [w._nav.item(i).text() for i in range(w._nav.count())]
+    assert labels == ["Dashboard", "Models", "Server options", "Logs", "Settings"]
+    assert "Downloads" not in labels
+    page = w._pages.widget(1)
+    assert isinstance(page, ModelsPage)
+    assert page.models is not None and page.downloads is not None
+    # Models moved off the dashboard, which is backends-only now.
+    assert not hasattr(w._dashboard, "models_section")
 
 
 def test_dashboard_has_backend_cards(qtbot: QtBot, fake_orch: MagicMock) -> None:

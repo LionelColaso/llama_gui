@@ -1,11 +1,14 @@
-"""Downloads: every interrupted, resumable download in one place.
+"""Downloads section: every interrupted, resumable download in one place.
 
-A single section listing each ``*.part`` (with its ``.meta``) the app knows
-about — half-downloaded .gguf models *and* half-downloaded backend release
-archives — so a flaky connection or an app restart never strands a multi-GB
-download. Each pending item is offered with Resume (driven through the shared
-progress widget, so Pause / Resume / Cancel keep working) and Discard (clean up
-the partial + meta).
+A single list of each ``*.part`` (with its ``.meta``) the app knows about —
+half-downloaded .gguf models *and* half-downloaded backend release archives —
+so a flaky connection or an app restart never strands a multi-GB download. Each
+pending item is offered with Resume (driven through the shared progress widget,
+so Pause / Resume / Cancel keep working) and Discard (clean up the partial +
+meta).
+
+It lives at the bottom of the **Models** tab, next to the library the downloads
+are for; the section is reused verbatim by the hub's tests.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import Any
 
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -84,8 +88,8 @@ class _PendingRow(QWidget):
         layout.addLayout(actions)
 
 
-class DownloadsPage(DownloadActionsMixin, QWidget):
-    """The downloads hub: pending resume/discard plus one active download bar."""
+class DownloadsSection(DownloadActionsMixin, QWidget):
+    """Pending resume/discard rows plus one active download progress bar."""
 
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -93,19 +97,11 @@ class DownloadsPage(DownloadActionsMixin, QWidget):
         self._rows: list[_PendingRow] = []
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        title = QLabel("Downloads")
-        title.setObjectName("PageTitle")
+        title = QLabel("Interrupted downloads")
+        title.setObjectName("SectionTitle")
         layout.addWidget(title)
-
-        intro = QLabel(
-            "Interrupted downloads that can be resumed. If a large model or "
-            "backend archive was cut short, finish it here — Pause / Resume / "
-            "Cancel work while it downloads, and it survives app restarts."
-        )
-        intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {COLORS['muted']};")
-        layout.addWidget(intro)
 
         self._progress = ProgressWidget()
         layout.addWidget(self._progress)
@@ -119,6 +115,7 @@ class DownloadsPage(DownloadActionsMixin, QWidget):
 
         btn_row = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Re-scan for partial downloads.")
         refresh_btn.clicked.connect(self._load)
         btn_row.addWidget(refresh_btn)
         btn_row.addStretch()
@@ -129,6 +126,19 @@ class DownloadsPage(DownloadActionsMixin, QWidget):
         layout.addWidget(self._status_label)
 
         self._load()
+        self._shown = False
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Re-scan on every visit, so a download finished elsewhere disappears.
+
+        The first load already ran in ``__init__``; this keeps the list honest
+        when the tab is reopened after a resume, a discard or a fresh download
+        that was interrupted.
+        """
+        super().showEvent(event)
+        if self._shown:
+            self._load()
+        self._shown = True
 
     # ─── Loading ─────────────────────────────────────────────────────────
 
@@ -211,3 +221,6 @@ class DownloadsPage(DownloadActionsMixin, QWidget):
 
     def _on_error(self, msg: str) -> None:
         self._status_label.setText(f"Error: {msg}")
+
+
+__all__ = ["DownloadsSection"]

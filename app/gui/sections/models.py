@@ -1,8 +1,9 @@
 """Models section: the .gguf library — list, download, select and remove.
 
-Models are files in the configured models directory (Settings → Paths). The
-page drives the engine's model actions through the worker pool, so the GUI and
-the CLI stay on the same code path.
+Models are files in the configured models directory (Settings → Locations).
+Shown at the top of the **Models** tab; the interrupted-downloads rows sit below
+it. The section drives the engine's model actions through the worker pool, so
+the GUI and the CLI stay on the same code path.
 """
 
 from __future__ import annotations
@@ -41,12 +42,12 @@ class ModelsSection(DownloadActionsMixin, QWidget):
         super().__init__(parent)
         self._orch = orch
         self._pending_active: str | None = None
+        # Set before anything can raise showEvent: a QWidget that is shown while
+        # this constructor is still running must find the flag already there.
+        self._resume_prompted = False
 
         layout = QVBoxLayout(self)
-
-        title = QLabel("Models")
-        title.setObjectName("PageTitle")
-        layout.addWidget(title)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self._dir_label = QLabel()
         self._dir_label.setStyleSheet(f"color: {COLORS['muted']};")
@@ -83,7 +84,6 @@ class ModelsSection(DownloadActionsMixin, QWidget):
 
         self._load()
         self._show_server_path()
-        self._resume_prompted = False
 
     # ─── Resume prompt ───────────────────────────────────────────────────
 
