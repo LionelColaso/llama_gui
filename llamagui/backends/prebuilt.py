@@ -1,0 +1,755 @@
+"""Managed-prebuilt source: download official GitHub release binaries.
+
+Works on Windows, Linux and macOS: the asset for the running platform comes
+from the backend catalogue in :mod:`llamagui.models`, and archives are unpacked
+in a way that survives POSIX packaging conventions (executable bits, symlinked
+``libllama.so`` chains) as well as Windows zips.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import stat
+import sys
+import tarfile
+import threading
+import time
+import zipfile
+from collections.abc import Callable, Iterable
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from ..download import DownloadCancelled, DownloadError, stream_download
+from ..models import Backend, backend_availability, get_backend
+from ..paths import (
+    clear_quarantine,
+    is_windows,
+    make_executable,
+)
+
+LLAMA_CPP_REPO = "ggml-org/llama.cpp"
+
+
+class PrebuiltError(Exception):
+    """A prebuilt download/extract step failed (network, asset, archive)."""
+
+
+class PrebuiltUnavailable(PrebuiltError):
+    """No official prebuilt exists for this backend on this platform."""
+
+
+# ─── Asset patterns ───────────────────────────────────────────────────────
+
+
+def backend_asset_pattern(backend: str) -> str | None:
+    """Return the llama.cpp asset regex for ``backend`` on this platform."""
+    entry = get_backend(backend)
+    return entry.asset_pattern() if entry else None
+
+
+def _cudart_pattern(entry: Backend, mode: str) -> str | None:
+    """Return the CUDA runtime pack regex to fetch, honouring the user's mode.
+
+    ``auto``   – only when the backend cannot run without it (CUDA 12).
+    ``always`` – whenever the backend has a runtime pack (self-contained CUDA).
+    ``never``  – rely on the CUDA toolkit installed on the machine.
+    """
+    if entry.cudart_pattern is None or mode == "never":
+        return None
+    if mode == "always" or entry.needs_cudart:
+        return entry.cudart_pattern
+    return None
+
+
+# ─── GUI progress callback ────────────────────────────────────────────────
+
+ProgressCallback = Callable[[int, int, str, float | None], None]
+
+#: Thread-local rather than process-global. The GUI runs each mutation on its
+#: own QThreadPool thread, and two can overlap (the auto-update timer plus a
+#: model download). With a single global, the second worker's install would
+#: overwrite the first's callback, and whichever finished first would clear it
+#: out from under the other — so progress for one download could stop updating,
+#: or two bars could be driven by the wrong worker. Scoping to the thread keeps
+#: each worker's callback to itself.
+_progress_state = threading.local()
+
+
+def set_progress_callback(cb: ProgressCallback | None) -> None:
+    _progress_state.callback = cb
+
+
+def get_progress_callback() -> ProgressCallback | None:
+    return getattr(_progress_state, "callback", None)
+
+
+def emit_progress(
+    component: str,
+    bytes_done: int,
+    bytes_total: int,
+    phase: str,
+    overall: float | None = None,
+) -> None:
+    callback = get_progress_callback()
+    if callback is None:
+        # CLI mode: the PROGRESS line protocol on stderr is the progress
+        # channel (parsed via models.parse_progress_line). The optional
+        # ``overall`` fraction is GUI-only and is intentionally omitted here
+        # so the stable 4-field line protocol is preserved.
+        print(
+            f"PROGRESS\t{component}\t{bytes_done}\t{bytes_total}\t{phase}",
+            file=sys.stderr,
+        )
+    else:
+        # GUI mode: the worker forwards the tick over its Qt signal; no
+        # stderr spam for a terminal that merely hosts the GUI. ``overall``
+        # (when known) is the fraction of the *whole* operation done so far,
+        # so multi-phase work (download → extract → cudart) renders as one
+        # continuous bar instead of several 0→100% segments.
+        callback(bytes_done, bytes_total, phase, overall)
+
+
+class _ExtractProgress:
+    """Counts extracted bytes so extraction shows a real, moving bar.
+
+    The total is filled in by the extractor once it has enumerated the archive
+    members (so it can sum their sizes); each written file calls :meth:`add`
+    with its byte count. ``overall`` maps that into the caller's window so the
+    extract phase lines up with the surrounding download/extract stages.
+    """
+
+    def __init__(self, component: str, overall_range: tuple[float, float]) -> None:
+        self.component = component
+        self.lo, self.hi = overall_range
+        self.total = 0
+        self.done = 0
+
+    def set_total(self, total: int) -> None:
+        self.total = total
+
+    def add(self, n: int) -> None:
+        self.done += n
+        overall = (
+            self.lo + (self.done / self.total) * (self.hi - self.lo)
+            if self.total > 0
+            else self.hi
+        )
+        emit_progress(self.component, self.done, self.total, "extract", overall)
+
+    # ─── GitHub API x ──────────────────────────────────────────────────────────
+
+
+#: How long a fetched release stays fresh, in seconds. A single install/update
+#: run asks for the same release once per backend, so the cache exists purely to
+#: avoid redundant round-trips (the API rate-limits unauthenticated callers).
+#: It must expire, though: the app is a long-lived GUI and ``auto_update`` runs
+#: on a timer, so a cache that never expired would pin "latest" to whatever was
+#: fetched on the first call for the whole session.
+RELEASE_CACHE_TTL = 300.0
+
+#: ``(repo, token) -> (fetched_at, payload)``.
+_RELEASE_CACHE: dict[tuple[str, str | None], tuple[float, dict[str, Any]]] = {}
+
+
+def _fetch_release(repo: str, token: str | None) -> dict[str, Any]:
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    headers: dict[str, str] = {"Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        return dict(resp.json())
+    except httpx.HTTPError as e:
+        raise PrebuiltError(f"GitHub API error for {repo}: {e}") from e
+
+
+def clear_release_cache() -> None:
+    """Drop every cached release so the next call hits the network.
+
+    Used by ``update``/``use --auto-install``, which must observe a release
+    published after the app started rather than whatever was cached at launch.
+    """
+    _RELEASE_CACHE.clear()
+
+
+def latest_release(repo: str, token: str | None = None) -> dict[str, Any]:
+    """Return the latest GitHub release for ``repo``, cached for a short while.
+
+    Memoized per ``(repo, token)`` for :data:`RELEASE_CACHE_TTL` seconds: one
+    install/update run requests the same release several times (once per
+    backend) and the API rate-limits unauthenticated callers, but the entry must
+    expire so a long-running GUI notices newly published releases.
+    """
+    key = (repo, token)
+    now = time.monotonic()
+    cached = _RELEASE_CACHE.get(key)
+    if cached is not None:
+        fetched_at, payload = cached
+        if now - fetched_at < RELEASE_CACHE_TTL:
+            return payload
+    payload = _fetch_release(repo, token)
+    _RELEASE_CACHE[key] = (now, payload)
+    return payload
+
+
+def match_asset(assets: list[dict[str, Any]], pattern: str) -> dict[str, Any] | None:
+    compiled = re.compile(pattern)
+    for asset in assets:
+        name = asset.get("name", "")
+        if compiled.search(name):
+            return {
+                "name": name,
+                "size": asset.get("size", 0),
+                "url": asset["browser_download_url"],
+            }
+    return None
+
+
+def download_file(
+    url: str,
+    dest: Path,
+    token: str | None = None,
+    *,
+    component: str = "download",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> Path:
+    try:
+        return stream_download(
+            url,
+            dest,
+            auth_token=token,
+            component=component,
+            overall_range=overall_range,
+            emit=emit_progress,
+        )
+    except DownloadCancelled as e:
+        raise PrebuiltError(f"Download cancelled: {url}") from e
+    except DownloadError as e:
+        raise PrebuiltError(str(e)) from e
+
+
+def _is_readable_archive(path: Path) -> bool:
+    """True when ``path`` opens as a zip or tar.gz.
+
+    A cache hit is normally decided by byte count alone, which is unsafe: a
+    truncated download, a partially-written file, or a size that the API
+    reported incorrectly would all be accepted and then fail much later
+    during extraction, with a confusing error. Opening the container first
+    turns that into an ordinary re-download.
+    """
+    try:
+        if zipfile.is_zipfile(path):
+            return True
+    except OSError:
+        pass
+    try:
+        if _is_tar_gz(path):
+            with tarfile.open(path, "r:gz") as tf:
+                # getmembers forces the header/index to be read, so a truncated
+                # or corrupt archive fails here rather than mid-extraction.
+                return len(tf.getmembers()) > 0
+    except (OSError, EOFError, tarfile.TarError):
+        # A truncated gzip stream surfaces as EOFError from the zlib layer,
+        # which is not an OSError or a TarError.
+        return False
+    return False
+
+
+def cached_download(
+    url: str,
+    size: int,
+    cache_dir: Path,
+    token: str | None = None,
+    *,
+    component: str = "download",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> Path:
+    """Download ``url`` unless a valid cached copy already exists.
+
+    A cache hit requires both the expected byte count *and* an archive that
+    actually opens. Size alone is not proof: a truncated or half-written file
+    can match, and it would otherwise be accepted and fail later during
+    extraction with a misleading error. A cached file that does not open is
+    discarded and re-downloaded.
+    """
+    name = url.rsplit("/", 1)[-1]
+    cache_path = cache_dir / name
+    lo, hi = overall_range
+    if cache_path.exists() and cache_path.stat().st_size == size:
+        if _is_readable_archive(cache_path):
+            emit_progress(component, size, size, "cache hit", hi)
+            return cache_path
+        # Corrupt or partial: drop it and fall through to a fresh download.
+        with suppress(OSError):
+            cache_path.unlink()
+    emit_progress(component, 0, size, "download", lo)
+    download_file(
+        url, cache_path, token, component=component, overall_range=overall_range
+    )
+    if size and cache_path.stat().st_size != size:
+        cache_path.unlink(missing_ok=True)
+        raise PrebuiltError(f"Downloaded size mismatch for {name}")
+    return cache_path
+
+
+# ─── Archive extraction ───────────────────────────────────────────────────
+
+
+def _is_tar_gz(path: Path) -> bool:
+    return path.name.endswith((".tar.gz", ".tgz"))
+
+
+def _normalize(name: str) -> Path:
+    """Normalize an archive member name (strip ``./`` and Windows slashes)."""
+    parts = [p for p in Path(name.replace("\\", "/")).parts if p not in (".", "")]
+    return Path(*parts) if parts else Path()
+
+
+def _common_top_dir(parts_list: Iterable[tuple[str, ...]]) -> bool:
+    """True when every member lives under one shared top-level directory."""
+    materialized = [p for p in parts_list if p]
+    if not materialized:
+        return False
+    firsts = {parts[0] for parts in materialized}
+    if len(firsts) != 1:
+        return False
+    return all(len(parts) > 1 for parts in materialized)
+
+
+def _strip(relative: Path, strip_top: bool) -> Path:
+    return Path(*relative.parts[1:]) if strip_top else relative
+
+
+def _safe_target(dest_dir: Path, relative: Path) -> Path:
+    """Resolve an archive member inside ``dest_dir`` (blocks zip-slip)."""
+    root = dest_dir.resolve()
+    target = (root / relative).resolve()
+    if target != root and root not in target.parents:
+        raise PrebuiltError(f"Refusing to extract outside destination: {relative}")
+    return target
+
+
+def _apply_mode(target: Path, mode: int) -> None:
+    """Apply POSIX permission bits recorded in the archive (no-op on Windows)."""
+    if is_windows() or not mode:
+        return
+    try:
+        target.chmod(stat.S_IMODE(mode))
+    except OSError:
+        pass
+
+
+def _write_symlink(target: Path, link_to: str) -> None:
+    """Recreate an archive symlink; fall back to copying when unsupported.
+
+    Linux llama.cpp tarballs ship ``libllama.so -> libllama.so.0`` chains; a
+    dropped symlink leaves ``llama-server`` unable to load its own libraries.
+    """
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    try:
+        target.symlink_to(link_to)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    source = (target.parent / link_to).resolve()
+    if source.is_file():
+        shutil.copy2(source, target)
+
+
+def _extract_tar(
+    archive_path: Path, dest_dir: Path, prog: _ExtractProgress | None = None
+) -> None:
+    with tarfile.open(archive_path, "r:gz") as tf:
+        members = tf.getmembers()
+        strip_top = _common_top_dir(
+            _normalize(m.name).parts for m in members if not m.isdir()
+        )
+        if prog is not None:
+            prog.set_total(sum(m.size for m in members if m.isfile()))
+        # Regular files first so symlink targets already exist.
+        for member in sorted(members, key=lambda m: m.issym() or m.islnk()):
+            relative = _strip(_normalize(member.name), strip_top)
+            if not relative.parts:
+                continue
+            target = _safe_target(dest_dir, relative)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if member.issym():
+                _write_symlink(target, member.linkname)
+                continue
+            if member.islnk():
+                source = _safe_target(
+                    dest_dir, _strip(_normalize(member.linkname), strip_top)
+                )
+                if source.is_file():
+                    shutil.copy2(source, target)
+                continue
+            if not member.isfile():
+                continue
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            with src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            if prog is not None:
+                prog.add(member.size)
+            _apply_mode(target, member.mode)
+
+
+def _zip_member_mode(info: zipfile.ZipInfo) -> int:
+    """Return the UNIX mode stored in a zip entry (0 when absent)."""
+    if info.create_system == 3:  # 3 == UNIX
+        return info.external_attr >> 16
+    return 0
+
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    """True when a zip entry is a stored UNIX symlink (mode bits absent → no)."""
+    return info.create_system == 3 and stat.S_ISLNK(_zip_member_mode(info))
+
+
+def _extract_zip(
+    archive_path: Path, dest_dir: Path, prog: _ExtractProgress | None = None
+) -> None:
+    with zipfile.ZipFile(archive_path, "r") as zf:
+        infos = zf.infolist()
+        strip_top = _common_top_dir(
+            _normalize(i.filename).parts for i in infos if not i.is_dir()
+        )
+        if prog is not None:
+            # Count every non-directory entry that is written as a regular file
+            # (i.e. not a stored UNIX symlink). This is robust to archives that
+            # carry no UNIX mode bits, where S_ISREG() would wrongly report 0.
+            prog.set_total(
+                sum(
+                    i.file_size
+                    for i in infos
+                    if not i.is_dir() and not _is_zip_symlink(i)
+                )
+            )
+        for info in infos:
+            relative = _strip(_normalize(info.filename), strip_top)
+            if not relative.parts:
+                continue
+            target = _safe_target(dest_dir, relative)
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if _is_zip_symlink(info):
+                _write_symlink(target, zf.read(info).decode("utf-8"))
+                continue
+            with zf.open(info) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            if prog is not None:
+                prog.add(info.file_size)
+            _apply_mode(target, _zip_member_mode(info))
+
+
+def _mark_executables(dest_dir: Path) -> None:
+    """Ensure unpacked program files are runnable on POSIX.
+
+    Some archives carry no mode bits at all (zips created on Windows). Any
+    extension-less regular file is a program on POSIX, so give it +x.
+    """
+    if is_windows():
+        return
+    for path in dest_dir.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.suffix in ("", ".sh") or ".so" in path.suffixes:
+            make_executable(path)
+
+
+def wipe_and_extract(
+    archive_path: Path,
+    dest_dir: Path,
+    *,
+    component: str = "extract",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
+    """Replace ``dest_dir`` with the contents of ``archive_path``.
+
+    The directory is wiped first so stale DLLs/SOs from a previous release can
+    never be picked up (invariant #4). A single wrapping top-level folder in
+    the archive is stripped; flat archives are extracted as-is. Extraction
+    progress is reported byte-by-byte via ``component``/``overall_range`` so the
+    GUI bar advances through the extract phase instead of freezing on it.
+    """
+    if dest_dir.exists() or dest_dir.is_symlink():
+        if dest_dir.is_symlink():
+            dest_dir.unlink()
+        else:
+            shutil.rmtree(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    prog: _ExtractProgress | None = None
+    if get_progress_callback() is not None:
+        prog = _ExtractProgress(component, overall_range)
+
+    if _is_tar_gz(archive_path):
+        _extract_tar(archive_path, dest_dir, prog)
+    elif archive_path.suffix.lower() == ".zip":
+        _extract_zip(archive_path, dest_dir, prog)
+    else:
+        raise PrebuiltError(f"Unsupported archive format: {archive_path}")
+
+    if prog is not None:
+        prog.done = prog.total
+        emit_progress(component, prog.total, prog.total, "extract", overall_range[1])
+
+    _mark_executables(dest_dir)
+    clear_quarantine(dest_dir)
+
+
+def _extract_cudart(
+    archive_path: Path,
+    dest_dir: Path,
+    *,
+    component: str = "cudart",
+    overall_range: tuple[float, float] = (0.0, 1.0),
+) -> None:
+    """Drop the CUDA runtime shared libraries next to the backend binaries."""
+    lib_suffixes = {".dll", ".so", ".dylib"}
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    def _wanted(name: str) -> bool:
+        member = _normalize(name)
+        return bool(member.parts) and member.suffix.lower() in lib_suffixes
+
+    prog: _ExtractProgress | None = None
+    if get_progress_callback() is not None:
+        prog = _ExtractProgress(component, overall_range)
+
+    if _is_tar_gz(archive_path):
+        with tarfile.open(archive_path, "r:gz") as tf:
+            members = [m for m in tf.getmembers() if m.isfile() and _wanted(m.name)]
+            if prog is not None:
+                prog.set_total(sum(m.size for m in members))
+            for member in members:
+                target = _safe_target(dest_dir, Path(_normalize(member.name).name))
+                src = tf.extractfile(member)
+                if src is not None:
+                    with src, target.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    _apply_mode(target, member.mode)
+                    if prog is not None:
+                        prog.add(member.size)
+    elif archive_path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            infos = [i for i in zf.infolist() if not i.is_dir() and _wanted(i.filename)]
+            if prog is not None:
+                prog.set_total(
+                    sum(i.file_size for i in infos if not _is_zip_symlink(i))
+                )
+            for info in infos:
+                target = _safe_target(dest_dir, Path(_normalize(info.filename).name))
+                with zf.open(info) as src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                _apply_mode(target, _zip_member_mode(info))
+                if prog is not None:
+                    prog.add(info.file_size)
+    else:
+        raise PrebuiltError(f"Unsupported archive format for cudart: {archive_path}")
+
+    if prog is not None:
+        prog.done = prog.total
+        emit_progress(component, prog.total, prog.total, "extract", overall_range[1])
+
+
+def write_version_marker(
+    dest_dir: Path, tag: str, source: str = "managed-prebuilt"
+) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / ".version").write_text(f"{tag}\n{source}\n", encoding="utf-8")
+
+
+def read_version_marker(dest_dir: Path) -> str | None:
+    marker = dest_dir / ".version"
+    if not marker.exists():
+        return None
+    return marker.read_text(encoding="utf-8").strip().split("\n", 1)[0].strip()
+
+
+# ─── Install ──────────────────────────────────────────────────────────────
+
+
+def install_backend(
+    backend: str,
+    managed_root: Path,
+    downloads_dir: Path,
+    token: str | None = None,
+    force: bool = False,
+    *,
+    bundle_cuda_runtime: str = "auto",
+) -> dict[str, Any]:
+    """Install (or refresh) one backend from the latest llama.cpp release."""
+    entry = get_backend(backend)
+    if entry is None:
+        raise PrebuiltError(f"Unknown backend: {backend}")
+
+    pattern = entry.asset_pattern()
+    if pattern is None:
+        raise PrebuiltUnavailable(backend_availability(backend)["reason"])
+
+    release = latest_release(LLAMA_CPP_REPO, token)
+    tag: str = release.get("tag_name", "unknown")
+    assets: list[dict[str, Any]] = release.get("assets", [])
+
+    if not force and read_version_marker(managed_root / backend) == tag:
+        return {"name": backend, "status": "skipped", "version": tag, "bytes": 0}
+
+    asset = match_asset(assets, pattern)
+    if not asset:
+        raise PrebuiltError(f"No asset matching '{pattern}' in release {tag}")
+
+    # Decide the phase split up front so each stage maps to a known slice of the
+    # overall progress bar (download → extract → [cudart download → cudart
+    # extract]). Weights are heuristics tuned to typical asset sizes (~150 MB
+    # binary vs ~390 MB cudart pack).
+    cudart = _cudart_pattern(entry, bundle_cuda_runtime)
+    if cudart:
+        ranges = {
+            "download": (0.0, 0.55),
+            "extract": (0.55, 0.75),
+            "cudart_download": (0.75, 0.95),
+            "cudart_extract": (0.95, 1.0),
+        }
+    else:
+        ranges = {
+            "download": (0.0, 0.7),
+            "extract": (0.7, 1.0),
+        }
+
+    cache_path = cached_download(
+        asset["url"],
+        asset["size"],
+        downloads_dir,
+        token,
+        component=backend,
+        overall_range=ranges["download"],
+    )
+    wipe_and_extract(
+        cache_path,
+        managed_root / backend,
+        component=backend,
+        overall_range=ranges["extract"],
+    )
+
+    if cudart:
+        cudart_asset = match_asset(assets, cudart)
+        if cudart_asset:
+            component = f"{backend}-cudart"
+            cudart_cache = cached_download(
+                cudart_asset["url"],
+                cudart_asset["size"],
+                downloads_dir,
+                token,
+                component=component,
+                overall_range=ranges["cudart_download"],
+            )
+            _extract_cudart(
+                cudart_cache,
+                managed_root / backend,
+                component=component,
+                overall_range=ranges["cudart_extract"],
+            )
+        elif entry.needs_cudart:
+            raise PrebuiltError(
+                f"Release {tag} has no CUDA runtime pack matching '{cudart}'; "
+                f"'{backend}' cannot run without it."
+            )
+
+    write_version_marker(managed_root / backend, tag)
+    return {"name": backend, "status": "ok", "version": tag, "bytes": asset["size"]}
+
+
+def _asset_flag(name: str) -> str:
+    """Best-effort label describing what an asset contains."""
+    lowered = name.lower()
+    if lowered.startswith("cudart"):
+        return "cudart"
+    for backend in ("vulkan", "cuda-13", "cuda-12", "rocm", "sycl", "openvino", "cpu"):
+        if backend in lowered:
+            return backend.replace("-", "")
+    if "macos" in lowered:
+        return "metal"
+    return "other"
+
+
+def list_assets(repo: str = LLAMA_CPP_REPO, token: str | None = None) -> dict[str, Any]:
+    release = latest_release(repo, token)
+    return {
+        "release": release.get("tag_name"),
+        "assets": [
+            {
+                "name": a["name"],
+                "size": a.get("size", 0),
+                "flag": _asset_flag(a["name"]),
+            }
+            for a in release.get("assets", [])
+        ],
+    }
+
+
+def latest_versions(token: str | None = None) -> dict[str, str | None]:
+    """Return the newest published llama.cpp release tag."""
+    try:
+        return {"llama_cpp": latest_release(LLAMA_CPP_REPO, token).get("tag_name")}
+    except PrebuiltError:
+        return {"llama_cpp": None}
+
+
+def installed_backends(managed_root: Path) -> dict[str, str]:
+    """Map of installed backend name → version tag (from ``.version`` files)."""
+    found: dict[str, str] = {}
+    if not managed_root.is_dir():
+        return found
+    for child in managed_root.iterdir():
+        if not child.is_dir() or child.name == "current":
+            continue
+        tag = read_version_marker(child)
+        if tag:
+            found[child.name] = tag
+    return found
+
+
+def failure_hint(exc: Exception) -> str:
+    """Human-readable next step for a failed prebuilt operation."""
+    if isinstance(exc, PrebuiltUnavailable):
+        return "Point at an existing binary instead (Settings, Paths group)."
+    if isinstance(exc, PrebuiltError):
+        return "Check the network connection, or add a GitHub token in Settings."
+    return str(exc)
+
+
+__all__ = [
+    "LLAMA_CPP_REPO",
+    "PrebuiltError",
+    "PrebuiltUnavailable",
+    "backend_asset_pattern",
+    "cached_download",
+    "clear_release_cache",
+    "download_file",
+    "emit_progress",
+    "failure_hint",
+    "get_progress_callback",
+    "install_backend",
+    "installed_backends",
+    "latest_release",
+    "latest_versions",
+    "list_assets",
+    "match_asset",
+    "read_version_marker",
+    "set_progress_callback",
+    "wipe_and_extract",
+    "write_version_marker",
+]
