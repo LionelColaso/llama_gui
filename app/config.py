@@ -44,7 +44,7 @@ CUDA_RUNTIME_MODES = ("auto", "always", "never")
 
 def default_backend() -> str:
     """Default backend for the running platform (data-driven)."""
-    from .models import platform_default_backend
+    from .backends.catalogue import platform_default_backend
 
     return platform_default_backend()
 

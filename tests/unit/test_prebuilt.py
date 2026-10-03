@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.backends.catalogue import get_backend
 from app.backends.prebuilt import (
     PrebuiltError,
     PrebuiltUnavailable,
@@ -31,7 +32,6 @@ from app.backends.prebuilt import (
     set_progress_callback,
     wipe_and_extract,
 )
-from app.models import get_backend
 from app.paths import arch_key, platform_key
 
 _PLATFORM = platform_key()

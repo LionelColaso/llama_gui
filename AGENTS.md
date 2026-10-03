@@ -156,7 +156,7 @@ drivable surface. `contract_version` is `"4"`.
 1. **Never write outside the managed root** (§1). The OS-installed binary is
    read-only.
 2. **Asset selection is data** (regex per backend). Adding a backend = one row
-   in `models.BACKENDS`, not new control flow.
+   in `backends/catalogue.py`'s `BACKENDS`, not new control flow.
 3. **Wipe‑then‑extract** a backend dir on (re)install (prevents stale DLLs).
    Deletion is only ever: the temp download scratch, the one backend dir being
    replaced, or the `managed/current` **link** (never the target's contents).
@@ -332,7 +332,7 @@ CREATE_NO_WINDOW` + `TerminateProcess`; POSIX `start_new_session` +
   available, 3 network, 4 lock conflict, 5 bad argument, 6 contract mismatch.
 - **Progress:** in CLI mode the engine emits a stable 4-field line on stderr —
   `PROGRESS\t<component>\t<done>\t<total>\t<phase>` — parsed by
-  `models.parse_progress_line`. The GUI instead receives
+  `progress.parse_progress_line`. The GUI instead receives
   `(done, total, phase, overall)` over a Qt signal.
 - **`status` payload** (`StatusData`): `{ backends: {<name>:{installed, version,
   source, prebuilt_available, unavailable_reason}}, active, junction_target,
@@ -371,44 +371,40 @@ llama_gui/
 ├── docs/BUILD.md                  # triple, resolver, cadence, Nuitka notes
 ├── scripts/                       # build.py check.py clean.py mapping.py stats.py
 │                                  #   + check_server_args.py (catalogue vs --help)
-├── app/                          # the engine
+├── app/                           # the engine
 │   ├── __init__.py  __main__.py   # `python -m app` (loguru + excepthook)
 │   ├── applog.py                  # loguru config: rotating file sink + excepthook
 │   ├── cli.py                     # argparse + envelope + exit codes (§11)
 │   ├── config.py                  # AppConfig (JSON, atomic), derived paths
 │   ├── schemas.py                 # contract v4 models (StatusData, InstallData, …)
-│   ├── resolver.py                # llama-server resolver (backend location + OS toggle)
-│   ├── lifecycle.py               # launch/verify/stop + pure-Python state reads
-│   ├── model_store.py             # .gguf list/download/set-active/remove
 │   ├── orchestrator.py            # actions, locking, wiring
-│   ├── models.py                  # backend table + Source + PROGRESS-line parser
-│   ├── serverargs.py              # llama-server option catalogue (data) + helpers
+│   ├── resolver.py                # llama-server resolver (backend location + OS toggle)
+│   ├── lifecycle.py               # launch/verify/stop + the pid file
+│   ├── state.py                   # pure reads: active backend, .version, current link, port
+│   ├── links.py                   # the `managed/current` link (symlink / mklink /J)
+│   ├── progress.py                # the PROGRESS stderr line protocol (§11)
+│   ├── model_store.py             # .gguf list/download/set-active/remove
+│   ├── download.py                # resumable/pausable/cancellable download engine
 │   ├── paths.py                   # platform paths (root, config_file, exe_suffix)
 │   ├── locking.py                 # named mutex / lockfile for mutations
-│   ├── download.py                # resumable/pausable/cancellable download engine
-│   └── backends/prebuilt.py       # GitHub release download + cache + .version
-└── app/gui/                      # the PySide6 front-end (§13)
-    ├── app.py  main_window.py     # tray / launch-on-start / start-minimized
+│   ├── backends/catalogue.py      # BACKENDS data table + Source + availability
+│   ├── backends/prebuilt.py       # GitHub release download + cache + .version
+│   └── serverargs/                # llama-server option catalogue (data) + helpers
+└── app/gui/                       # the PySide6 front-end (§13)
+    ├── bootstrap.py               # `run()`: logging, QApplication, theme, window
+    ├── main_window.py             # sidebar, tray, launch-on-start, start-minimized
     ├── theme.py  token.py         # QSS design system; keyring token
     ├── payload.py                 # worker-result → dict normalisation
     ├── worker_pool.py             # QRunnable around the engine (never block UI)
+    ├── download_actions.py        # download slots shared by a page and a section
     ├── dialogs/first_run.py       # shown when nothing resolves
-    ├── pages/                     # dashboard, backends, models, server_args,
+    ├── pages/                     # the 5 sidebar pages: dashboard, server_args,
     │                              #   logs, settings, downloads
-    └── widgets/                   # backend_card, download_runner, log_view,
-                                   #   model_table, path_picker, progress_bar,
-                                   #   source_badge
+    ├── sections/                  # dashboard panels: backends, models
+    └── widgets/                   # backend_card, log_view, model_table, path_picker,
+                                   #   progress_bar, source_badge
 
-tests/
-├── conftest.py                    # autouse loguru isolation; fake_root; port fixtures
-├── unit/          test_applog test_cli test_config_durable test_contract
-│                  test_download test_lifecycle test_lifecycle_posix test_locking
-│                  test_models_catalogue test_orchestrator test_paths
-│                  test_prebuilt test_progress test_resolver test_state_reader
-├── integration/   test_managed_prebuilt.py   # gated: network
-└── gui/           conftest.py test_dashboard test_downloads_page
-                   test_main_window test_phase7 test_progress_widget
-                   test_worker_progress_threading
+tests/                            # mirrors app/ 1:1 (unit + gui + integration)
 ```
 
 ---
@@ -434,9 +430,9 @@ tests/
 - **Tray:** a persistent system-tray icon with Show/Quit; closing the window
   tears the app down (it does **not** merely hide to tray — see the regression
   test in `tests/gui/test_main_window.py`).
-- **Theme:** system/light/dark, applied from `gui/app.py` via the `gui/theme.py`
-  QSS design system (centralized tokens, palette + stylesheet; `system` follows
-  the OS colour scheme).
+- **Theme:** system/light/dark, applied from `gui/bootstrap.py` via the
+  `gui/theme.py` QSS design system (centralized tokens, palette + stylesheet;
+  `system` follows the OS colour scheme).
 
 ---
 

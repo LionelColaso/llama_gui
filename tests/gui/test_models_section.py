@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
-from app.gui.pages.models import ModelsPage
+from app.gui.sections.models import ModelsSection
 from app.gui.widgets.model_table import ModelTable
 
 
@@ -25,19 +25,19 @@ def _stub_resume_question(monkeypatch: pytest.MonkeyPatch, asked: list[bool]) ->
         asked.append(True)
         return QMessageBox.StandardButton.No
 
-    monkeypatch.setattr("app.gui.pages.models.QMessageBox.question", _question)
+    monkeypatch.setattr("app.gui.sections.models.QMessageBox.question", _question)
 
 
-class TestModelsPage:
+class TestModelsSection:
     def test_creates(self, qtbot: QtBot, fake_orch: MagicMock) -> None:
-        page = ModelsPage(fake_orch)
+        page = ModelsSection(fake_orch)
         qtbot.addWidget(page)
         assert page._table is not None
         assert page._dir_label is not None
         assert page._server_label is not None
 
     def test_on_list_renders_models(self, qtbot: QtBot, fake_orch: MagicMock) -> None:
-        page = ModelsPage(fake_orch)
+        page = ModelsSection(fake_orch)
         qtbot.addWidget(page)
         page._on_list(
             {
@@ -61,7 +61,7 @@ class TestModelsPage:
         asked: list[bool] = []
         _stub_resume_question(monkeypatch, asked)
 
-        ModelsPage(fake_orch)  # must not prompt
+        ModelsSection(fake_orch)  # must not prompt
 
         assert asked == [], "the resume prompt must not run in the constructor"
 
@@ -70,7 +70,7 @@ class TestModelsPage:
     ) -> None:
         offered: list[bool] = []
 
-        page = ModelsPage(fake_orch)
+        page = ModelsSection(fake_orch)
         qtbot.addWidget(page)
         monkeypatch.setattr(page, "_offer_resume", lambda: offered.append(True))
 

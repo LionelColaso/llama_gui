@@ -1,16 +1,19 @@
-"""Shared download-action slots for the Models and Downloads pages.
+"""Shared download-action slots for the Downloads page and Models section.
 
-Both pages drive long-running model downloads through the same worker-pool +
+Both drive long-running model downloads through the same worker-pool +
 progress-widget machinery, so the launch wiring (``EngineWorker`` construction,
-signal connections) and the progress / error slots live here to keep the
-per-page code focused on layout instead of duplicating the same handful of lines.
+signal connections) and the progress / error slots live here to keep the host
+code focused on layout instead of duplicating the same handful of lines. It sits
+at the ``gui/`` root because its two consumers are a page and a dashboard
+section.
 
 The host class is expected to provide:
 
 * ``self._orch``        – the orchestrator
 * ``self._progress``     – a :class:`ProgressWidget`
 * ``self._status_label`` – a ``QLabel`` for status text
-* ``self._on_downloaded`` – a slot invoked when a download finishes (page-specific)
+* ``self._on_downloaded`` – a slot invoked when a download finishes
+  (host-specific)
 """
 
 from __future__ import annotations
@@ -19,13 +22,13 @@ from typing import Any
 
 from PySide6.QtWidgets import QLabel
 
-from ...download import DownloadControl
-from ..worker_pool import EngineWorker, WorkerPool
-from .progress_bar import ProgressWidget
+from ..download import DownloadControl
+from .widgets.progress_bar import ProgressWidget
+from .worker_pool import EngineWorker, WorkerPool
 
 
-class DownloadActionMixin:
-    """Progress/error slots and a download-model launcher shared by the pages."""
+class DownloadActionsMixin:
+    """Progress/error slots and a download-model launcher shared by sections."""
 
     # Host-provided attributes (declared here so the mixin is self-documenting).
     _orch: Any

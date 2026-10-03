@@ -8,10 +8,16 @@ never spawn a subprocess.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from .backends.catalogue import (
+    backend_availability,
+    backend_table,
+    get_backend,
+    platform_backend_names,
+    platform_default_backend,
+)
 from .backends.prebuilt import (
     clear_release_cache,
     install_backend,
@@ -26,15 +32,12 @@ from .download import (
 )
 from .lifecycle import (
     build_llama_server_args,
-    check_port,
     launch_llama_server,
-    read_active_backend,
-    read_component_version,
-    read_junction_target,
     read_log_tail,
     running_pids,
     stop_processes,
 )
+from .links import link_current
 from .locking import mutation_lock
 from .model_store import (
     ModelDownloadError,
@@ -44,14 +47,7 @@ from .model_store import (
     list_models_cached,
     remove_model,
 )
-from .models import (
-    backend_availability,
-    backend_table,
-    get_backend,
-    platform_backend_names,
-    platform_default_backend,
-)
-from .paths import arch_key, config_file, exe_suffix, is_windows, platform_key
+from .paths import arch_key, config_file, exe_suffix, platform_key
 from .resolver import resolve_llama_server
 from .schemas import (
     BackendInfo,
@@ -82,6 +78,12 @@ from .serverargs import (
     find_arg,
     validate_options,
     validate_value,
+)
+from .state import (
+    check_port,
+    read_active_backend,
+    read_component_version,
+    read_junction_target,
 )
 
 ACTIONS = (
@@ -752,7 +754,7 @@ class Orchestrator:
         target = self.managed_root / backend
         if not target.is_dir():
             return
-        _link_current(self.managed_root / "current", target)
+        link_current(self.managed_root / "current", target)
         state_file = self.cfg.state_dir / "active.txt"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(backend + "\n", encoding="utf-8")
@@ -800,62 +802,6 @@ def _marker_version(root: Path, name: str) -> str | None:
 def _has_payload(directory: Path) -> bool:
     """True when a managed backend directory actually holds something."""
     return directory.is_dir() and any(directory.iterdir())
-
-
-def _link_current(link: Path, target: Path) -> None:
-    """Point ``link`` at ``target`` using the best mechanism per OS.
-
-    POSIX gets an atomically replaced symlink. Windows prefers a symlink (when
-    Developer Mode is on) and falls back to a directory junction, which needs
-    no elevation.
-    """
-    link.parent.mkdir(parents=True, exist_ok=True)
-
-    if not is_windows():
-        temp_link = link.with_name(link.name + ".new")
-        _remove_link(temp_link)
-        try:
-            os.symlink(str(target), str(temp_link), target_is_directory=True)
-            os.replace(str(temp_link), str(link))
-            return
-        except (OSError, NotImplementedError, ValueError) as e:
-            _remove_link(temp_link)
-            raise EngineError(
-                ExitCode.UNEXPECTED_ERROR,
-                f"Could not point 'current' at {target}: {e}",
-            ) from e
-
-    # Windows: replacing a directory link is not atomic, so drop it first.
-    _remove_link(link)
-    try:
-        os.symlink(str(target), str(link), target_is_directory=True)
-        return
-    except (OSError, NotImplementedError, ValueError):
-        _remove_link(link)
-    try:
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-            check=True,
-            capture_output=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise EngineError(
-            ExitCode.UNEXPECTED_ERROR,
-            f"Could not point 'current' at {target}: {e}",
-        ) from e
-
-
-def _remove_link(link: Path) -> None:
-    """Delete a link without ever touching the directory it points at."""
-    if link.is_symlink():
-        link.unlink(missing_ok=True)
-        return
-    if not link.exists():
-        return
-    try:
-        link.rmdir()  # junction / empty dir: removes the link, not the target
-    except OSError:
-        link.unlink(missing_ok=True)
 
 
 __all__ = ["ACTIONS", "Orchestrator"]

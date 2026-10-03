@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.lifecycle import (
+from app.state import (
     check_port,
     read_active_backend,
     read_component_version,

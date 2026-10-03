@@ -16,6 +16,7 @@ llama_gui/
 ├── app/
 │   ├── backends/
 │   │   ├── __init__.py
+│   │   ├── catalogue.py
 │   │   └── prebuilt.py
 │   ├── gui/
 │   │   ├── dialogs/
@@ -23,24 +24,26 @@ llama_gui/
 │   │   │   └── first_run.py
 │   │   ├── pages/
 │   │   │   ├── __init__.py
-│   │   │   ├── backends.py
 │   │   │   ├── dashboard.py
 │   │   │   ├── downloads.py
 │   │   │   ├── logs.py
-│   │   │   ├── models.py
 │   │   │   ├── server_args.py
 │   │   │   └── settings.py
+│   │   ├── sections/
+│   │   │   ├── __init__.py
+│   │   │   ├── backends.py
+│   │   │   └── models.py
 │   │   ├── widgets/
 │   │   │   ├── __init__.py
 │   │   │   ├── backend_card.py
-│   │   │   ├── download_runner.py
 │   │   │   ├── log_view.py
 │   │   │   ├── model_table.py
 │   │   │   ├── path_picker.py
 │   │   │   ├── progress_bar.py
 │   │   │   └── source_badge.py
 │   │   ├── __init__.py
-│   │   ├── app.py
+│   │   ├── bootstrap.py
+│   │   ├── download_actions.py
 │   │   ├── main_window.py
 │   │   ├── payload.py
 │   │   ├── theme.py
@@ -57,13 +60,15 @@ llama_gui/
 │   ├── config.py
 │   ├── download.py
 │   ├── lifecycle.py
+│   ├── links.py
 │   ├── locking.py
 │   ├── model_store.py
-│   ├── models.py
 │   ├── orchestrator.py
 │   ├── paths.py
+│   ├── progress.py
 │   ├── resolver.py
-│   └── schemas.py
+│   ├── schemas.py
+│   └── state.py
 ├── docs/
 │   ├── reference/
 │   │   └── llama-server-help.txt
@@ -86,7 +91,7 @@ llama_gui/
 │   │   ├── test_first_run.py
 │   │   ├── test_main_window.py
 │   │   ├── test_model_table.py
-│   │   ├── test_models_page.py
+│   │   ├── test_models_section.py
 │   │   ├── test_progress_widget.py
 │   │   ├── test_settings_page.py
 │   │   ├── test_token.py

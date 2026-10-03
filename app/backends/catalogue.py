@@ -1,19 +1,21 @@
-"""Domain types: the backend catalogue and the PROGRESS line protocol.
+"""The backend catalogue: domain data for every selectable compute backend.
 
-The backend catalogue is **data**, not code paths: adding a backend means
-adding one :class:`Backend` row (invariant #2 in ``AGENTS.md``). Every consumer
-— resolver, prebuilt downloader, CLI ``describe``, GUI — reads this table, so
-Windows, Linux and macOS stay consistent with a single edit.
+The catalogue is **data**, not code paths: adding a backend means adding one
+:class:`Backend` row (invariant #2 in ``AGENTS.md``). Every consumer — resolver,
+prebuilt downloader, CLI ``describe``, GUI — reads this table, so Windows, Linux
+and macOS stay consistent with a single edit.
+
+The ``PROGRESS`` line protocol lives in :mod:`app.progress`; the wire-format
+contract models live in :mod:`app.schemas`.
 """
 
 from __future__ import annotations
 
 import enum
-import re
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from .paths import arch_key, platform_key
+from ..paths import arch_key, platform_key
 
 
 class Source(enum.StrEnum):
@@ -198,41 +200,15 @@ def backend_table(
     return rows
 
 
-@dataclass
-class ProgressEvent:
-    component: str
-    bytes_done: int
-    bytes_total: int
-    phase: str
-
-
-PROGRESS_RE = re.compile(r"^PROGRESS\t([\w-]+)\t(\d+)\t(\d+)\t(\w+)$")
-
-
-def parse_progress_line(line: str) -> ProgressEvent | None:
-    m = PROGRESS_RE.match(line.strip())
-    if not m:
-        return None
-    return ProgressEvent(
-        component=m.group(1),
-        bytes_done=int(m.group(2)),
-        bytes_total=int(m.group(3)),
-        phase=m.group(4),
-    )
-
-
 __all__ = [
     "BACKENDS",
     "BACKEND_BY_NAME",
-    "PROGRESS_RE",
     "Backend",
-    "ProgressEvent",
     "Source",
     "backend_availability",
     "backend_names",
     "backend_table",
     "get_backend",
-    "parse_progress_line",
     "platform_backend_names",
     "platform_backends",
     "platform_default_backend",

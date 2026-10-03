@@ -73,7 +73,6 @@ class MainWindow(QWidget):
 
         self._pages = QStackedWidget()
         self._dashboard = DashboardHome(self._orch)
-        self._backends = self._dashboard.backends
 
         root_path = self._orch.cfg.root_path
         self._logs = LogsPage(root_path / "state")
@@ -98,7 +97,7 @@ class MainWindow(QWidget):
         layout.addWidget(content, stretch=1)
 
         self._nav.setCurrentRow(0)
-        self._backends.start_refresh()
+        self._dashboard.start_refresh()
 
         # Auto-update timer: when enabled in config, run a headless update
         # on the configured interval and notify via the system tray.
@@ -158,13 +157,13 @@ class MainWindow(QWidget):
         """
         if self._orch.first_run_needed():
             FirstRunDialog(self._orch, self).exec()
-        self._backends.start_refresh()
+        self._dashboard.start_refresh()
 
     def _switch_page(self, index: int) -> None:
-        self._backends.stop_refresh()
+        self._dashboard.stop_refresh()
         self._pages.setCurrentIndex(index)
         if index == 0:
-            self._backends.start_refresh()
+            self._dashboard.start_refresh()
 
     def _auto_update(self) -> None:
         worker = EngineWorker(self._orch, "update", progress_callback=None)
@@ -216,7 +215,7 @@ class MainWindow(QWidget):
         # called event.ignore() while a tray existed and only hid the window,
         # leaving the process alive forever.
         try:
-            self._backends.stop_refresh()
+            self._dashboard.stop_refresh()
         except Exception:  # noqa: BLE001, S110 - best-effort during shutdown
             pass
         try:

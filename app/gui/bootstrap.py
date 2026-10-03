@@ -1,3 +1,9 @@
+"""GUI entry point: logging, QApplication, theme and the main window.
+
+Kept separate from :mod:`app.__main__` (which dispatches ``gui`` vs the CLI) so
+the Qt stack is only imported when the GUI is actually requested.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -20,18 +26,18 @@ def run() -> None:
     install_excepthook()
     logger.info("GUI starting")
 
-    app = QApplication(sys.argv)
-    app.setApplicationName("llama-gui")
+    qapp = QApplication(sys.argv)
+    qapp.setApplicationName("llama-gui")
 
     cfg = AppConfig.load()
-    apply_theme(app, cfg.theme)
+    apply_theme(qapp, cfg.theme)
 
     # MainWindow shows or hides itself based on the "start minimized" setting.
-    # Keep a reference so the window isn't garbage-collected during app.exec().
+    # Keep a reference so the window isn't garbage-collected during qapp.exec().
     window = MainWindow(cfg)
-    app.setProperty("_main_window", window)
+    qapp.setProperty("_main_window", window)
 
-    code = app.exec()
+    code = qapp.exec()
     # Drain the enqueued log queue so a last-second error survives the exit.
     logger.complete()
     sys.exit(code)

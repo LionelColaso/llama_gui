@@ -24,10 +24,10 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+from .backends.catalogue import Source
 from .config import AppConfig
-from .lifecycle import read_component_version, read_link_target
-from .models import Source
 from .paths import exe_suffix, is_executable, is_windows
+from .state import read_component_version, read_link_target
 
 #: Sub-directories searched (one level) when a backend folder holds a full
 #: llama.cpp layout rather than the binaries directly.

@@ -1,4 +1,4 @@
-"""Models page: the .gguf library — list, download, select and remove.
+"""Models section: the .gguf library — list, download, select and remove.
 
 Models are files in the configured models directory (Settings → Paths). The
 page drives the engine's model actions through the worker pool, so the GUI and
@@ -24,19 +24,19 @@ from PySide6.QtWidgets import (
 )
 
 from ...download import resumable_tasks
+from ..download_actions import DownloadActionsMixin
 from ..payload import as_payload
 from ..theme import COLORS
-from ..widgets.download_runner import DownloadActionMixin
 from ..widgets.model_table import ModelTable
 from ..widgets.progress_bar import ProgressWidget, _human
 from ..worker_pool import EngineWorker, WorkerPool
 
 
 def _ignore_error(msg: str) -> None:
-    logger.warning("Models page resolve error: {}", msg)
+    logger.warning("Models section resolve error: {}", msg)
 
 
-class ModelsPage(DownloadActionMixin, QWidget):
+class ModelsSection(DownloadActionsMixin, QWidget):
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orch = orch

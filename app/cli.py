@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser(use_json=use_json).parse_args(argv)
 
     if args.action == "gui":
-        from .gui.app import run as run_gui
+        from .gui.bootstrap import run as run_gui
 
         run_gui()
         return 0

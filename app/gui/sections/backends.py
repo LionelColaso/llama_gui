@@ -76,7 +76,7 @@ class BinaryRow(QGroupBox):
         self.path_label.setText(str(path))
 
 
-class BackendsPage(QWidget):
+class BackendsSection(QWidget):
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._orch = orch

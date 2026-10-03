@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from app.models import (
+from app.backends.catalogue import (
     BACKEND_BY_NAME,
     BACKENDS,
     backend_availability,

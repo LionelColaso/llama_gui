@@ -8,8 +8,8 @@ from typing import Any
 
 from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
-from .backends import BackendsPage
-from .models import ModelsPage
+from ..sections.backends import BackendsSection
+from ..sections.models import ModelsSection
 
 
 class DashboardHome(QScrollArea):
@@ -21,8 +21,8 @@ class DashboardHome(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
 
-        self.backends = BackendsPage(orch)
-        self.models_page = ModelsPage(orch)
+        self.backends = BackendsSection(orch)
+        self.models_section = ModelsSection(orch)
 
         content = QWidget()
         content.setObjectName("DashboardHomeContent")
@@ -30,6 +30,14 @@ class DashboardHome(QScrollArea):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(22)
         layout.addWidget(self.backends)
-        layout.addWidget(self.models_page)
+        layout.addWidget(self.models_section)
         layout.addStretch()
         self.setWidget(content)
+
+    def start_refresh(self) -> None:
+        """Begin polling the sections. Safe to call when already running."""
+        self.backends.start_refresh()
+
+    def stop_refresh(self) -> None:
+        """Stop polling. Safe to call when not running."""
+        self.backends.stop_refresh()

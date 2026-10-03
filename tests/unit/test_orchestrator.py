@@ -244,7 +244,7 @@ def _prebuilt_capable_backend() -> str:
     The "No asset matching" path runs the prebuilt download, so we need a
     backend whose asset pattern exists for this platform.
     """
-    from app.models import BACKENDS
+    from app.backends.catalogue import BACKENDS
     from app.paths import platform_key
 
     plat = platform_key()

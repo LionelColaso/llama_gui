@@ -18,7 +18,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     logger.info("llamagui starting (argv={})", list(argv))
 
     if len(argv) == 0:
-        from app.gui.app import run as run_gui
+        from app.gui.bootstrap import run as run_gui
 
         run_gui()
     else:

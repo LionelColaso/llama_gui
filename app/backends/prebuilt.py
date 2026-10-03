@@ -1,7 +1,7 @@
 """Managed-prebuilt source: download official GitHub release binaries.
 
 Works on Windows, Linux and macOS: the asset for the running platform comes
-from the backend catalogue in :mod:`app.models`, and archives are unpacked
+from the backend catalogue in :mod:`app.backends.catalogue`, and archives are unpacked
 in a way that survives POSIX packaging conventions (executable bits, symlinked
 ``libllama.so`` chains) as well as Windows zips.
 """
@@ -24,12 +24,12 @@ from typing import Any
 import httpx
 
 from ..download import DownloadCancelled, DownloadError, stream_download
-from ..models import Backend, backend_availability, get_backend
 from ..paths import (
     clear_quarantine,
     is_windows,
     make_executable,
 )
+from .catalogue import Backend, backend_availability, get_backend
 
 LLAMA_CPP_REPO = "ggml-org/llama.cpp"
 
@@ -97,7 +97,7 @@ def emit_progress(
     callback = get_progress_callback()
     if callback is None:
         # CLI mode: the PROGRESS line protocol on stderr is the progress
-        # channel (parsed via models.parse_progress_line). The optional
+        # channel (parsed via progress.parse_progress_line). The optional
         # ``overall`` fraction is GUI-only and is intentionally omitted here
         # so the stable 4-field line protocol is preserved.
         print(

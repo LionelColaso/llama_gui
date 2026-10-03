@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from app.backends.catalogue import Source
 from app.config import AppConfig
-from app.models import Source
 from app.resolver import resolve_llama_server
 
 

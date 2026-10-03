@@ -84,7 +84,7 @@ def test_use_auto_install_obtains_the_backend(
     network is stubbed here; the live download is covered by the ``integration``
     suite instead.
     """
-    from app.models import platform_backend_names
+    from app.backends.catalogue import platform_backend_names
 
     backend = next(iter(platform_backend_names()), "vulkan")
     assets = [{"name": f"{backend}-asset.zip", "browser_download_url": "https://x/y"}]

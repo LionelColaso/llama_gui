@@ -11,7 +11,7 @@ A PySide6 desktop app that drives [`llama-server`](https://github.com/ggml-org/l
 - **Two ways to get `llama-server`** — one location, one toggle:
   - **backend location** (default) — the app downloads the official llama.cpp prebuilt release into its own managed tree
   - **OS installed** (the "Use OS installed llama.cpp" toggle) — use the `llama-server` found on your `PATH`, with the downloaded backend as fallback
-- **Backends:** `vulkan` (default), `cuda13`, `cuda12`, `cpu`, `metal` (data-driven — see `models.BACKENDS`). One catalogue drives Windows, Linux **and** macOS.
+- **Backends:** `vulkan` (default), `cuda13`, `cuda12`, `cpu`, `metal` (data-driven — see `backends/catalogue.py`). One catalogue drives Windows, Linux **and** macOS.
 - **Model library:** the Models page lists the `.gguf` files in your models directory, downloads a model from a URL, sets the active model, and deletes models. The server is launched directly with the active model.
 - **Auto-install / first run:** a first-run dialog appears when nothing resolves yet, offering a download or the OS-install toggle. `bootstrap` downloads what is missing and activates it.
 - **Durable settings:** paths, chosen backend and CUDA-runtime mode live in a platform-native config dir (`%APPDATA%/llamagui`, `~/.config/llamagui`, `~/Library/Preferences/llamagui`) and survive restarts; a corrupt file is backed up, not overwritten. The GitHub token is kept only in the OS keyring.

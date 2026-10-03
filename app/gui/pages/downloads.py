@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from ...download import DownloadControl
+from ..download_actions import DownloadActionsMixin
 from ..payload import as_payload
 from ..theme import COLORS
-from ..widgets.download_runner import DownloadActionMixin
 from ..widgets.progress_bar import ProgressWidget, _human
 from ..worker_pool import EngineWorker, WorkerPool
 
@@ -84,7 +84,7 @@ class _PendingRow(QWidget):
         layout.addLayout(actions)
 
 
-class DownloadsPage(DownloadActionMixin, QWidget):
+class DownloadsPage(DownloadActionsMixin, QWidget):
     """The downloads hub: pending resume/discard plus one active download bar."""
 
     def __init__(self, orch: Any, parent: QWidget | None = None) -> None:

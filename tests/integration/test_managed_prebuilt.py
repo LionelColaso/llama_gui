@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from app.backends.catalogue import platform_backend_names
 from app.backends.prebuilt import (
     install_backend,
     list_assets,
 )
 from app.cli import main
-from app.models import platform_backend_names
 
 pytestmark = pytest.mark.integration
 

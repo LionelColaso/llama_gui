@@ -1,15 +1,17 @@
-"""Process lifecycle and file-based state reads.
+"""Server process lifecycle: launch, verify and stop llama-server.
 
-Launching, verifying and stopping the llama-server works the same on all three
-platforms, using the right primitive for each:
+Launching, verifying and stopping works the same on all three platforms,
+using the right primitive for each:
 
 * Windows – ``DETACHED_PROCESS | CREATE_NO_WINDOW`` so no console flashes and
-  the router outlives the GUI; ``TerminateProcess`` to stop it.
+  the server outlives the GUI; ``TerminateProcess`` to stop it.
 * Linux/macOS – ``start_new_session=True`` (own process group, survives the
   parent) and ``SIGTERM`` escalating to ``SIGKILL``.
 
-Reads (active backend, versions, current link, port liveness) are pure file
-and socket operations: never a subprocess, so the dashboard can poll them.
+This module owns process control and the pid file. The pure managed-root *reads*
+(active backend, versions, the ``current`` link, port liveness) live in
+:mod:`app.state`, and the ``current`` link itself is written by
+:mod:`app.links`.
 """
 
 from __future__ import annotations
@@ -18,8 +20,6 @@ import contextlib
 import json
 import os
 import signal
-import socket
-import struct
 import subprocess
 import sys
 import threading
@@ -33,6 +33,7 @@ from loguru import logger
 from .paths import is_windows
 from .schemas import EngineError, ExitCode
 from .serverargs import options_to_cli
+from .state import check_port
 
 PIDS_FILE = "state/pids.json"
 
@@ -425,83 +426,11 @@ def running_pids(root: Path) -> list[int]:
     return [p for p in candidates if isinstance(p, int) and _pid_exists(p)]
 
 
-# ─── State reads ──────────────────────────────────────────────────────────
-
-
-def read_active_backend(root: Path) -> str | None:
-    active_path = root / "state" / "active.txt"
-    if not active_path.exists():
-        return None
-    return active_path.read_text(encoding="utf-8").strip() or None
-
-
-def read_component_version(root: Path, name: str) -> tuple[str, str | None] | None:
-    version_file = root / "managed" / name / ".version"
-    if not version_file.exists():
-        return None
-    text = version_file.read_text(encoding="utf-8").strip()
-    parts = text.split("\n", 1)
-    tag = parts[0].strip()
-    source_str = parts[1].strip() if len(parts) > 1 else ""
-    return (tag, source_str)
-
-
-def read_link_target(path: Path) -> str | None:
-    """Resolve a symlink or Windows junction, tolerating a broken link."""
-    if not path.is_symlink() and not path.exists():
-        return None
-    try:
-        return os.readlink(str(path))
-    except (OSError, NotImplementedError, ValueError):
-        pass
-    return _read_reparse_point(path)
-
-
-def read_junction_target(root: Path) -> str | None:
-    """Target of the ``managed/current`` link, or None when not set."""
-    return read_link_target(root / "managed" / "current")
-
-
-def _read_reparse_point(path: Path) -> str | None:
-    """Read a Windows junction target from the raw reparse-point bytes."""
-    try:
-        handle = os.open(str(path), os.O_RDONLY)
-        try:
-            data = os.read(handle, 1024)
-            if len(data) < 20:
-                return None
-            tag = struct.unpack_from("I", data, 0)[0]
-            if tag != 0xA000000C:
-                return None
-            name_len = struct.unpack_from("H", data, 12)[0]
-            raw = data[20 : 20 + name_len]
-            return raw.decode("utf-16-le").rstrip("\x00")
-        finally:
-            os.close(handle)
-    except (OSError, struct.error, UnicodeDecodeError):
-        return None
-
-
-def check_port(host: str, port: int, timeout: float = 0.2) -> bool:
-    """True when something accepts a TCP connection on ``host:port``."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
 __all__ = [
     "PIDS_FILE",
     "LifecycleError",
-    "_read_reparse_point",
     "build_llama_server_args",
-    "check_port",
     "launch_llama_server",
-    "read_active_backend",
-    "read_component_version",
-    "read_junction_target",
-    "read_link_target",
     "read_log_tail",
     "running_pids",
     "stop_processes",

@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 from pytestqt.qtbot import QtBot
 
 from app.gui.main_window import MainWindow
-from app.gui.pages.backends import BackendsPage
 from app.gui.pages.dashboard import DashboardHome
 from app.gui.pages.downloads import DownloadsPage
 from app.gui.pages.logs import LogsPage
 from app.gui.pages.server_args import ServerArgsPage
 from app.gui.pages.settings import SettingsPage
+from app.gui.sections.backends import BackendsSection
 from app.gui.widgets.backend_card import BackendCard
 from app.gui.widgets.source_badge import SourceBadge
 from app.schemas import InstallData
@@ -82,7 +82,7 @@ def test_backend_card_shows_installed() -> None:
 
 
 def test_backend_cards_have_actions(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    page = BackendsPage(fake_orch)
+    page = BackendsSection(fake_orch)
     qtbot.addWidget(page)
     assert len(page._cards) == 3
     for card in page._cards.values():
@@ -92,7 +92,7 @@ def test_backend_cards_have_actions(qtbot: QtBot, fake_orch: MagicMock) -> None:
 
 
 def test_resolver_page_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
-    page = BackendsPage(fake_orch)
+    page = BackendsSection(fake_orch)
     qtbot.addWidget(page)
     assert page._server_row is not None
 
