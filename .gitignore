@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+node_modules/
+
+# Nuitka crash reports (large XML dumps emitted on compiler failures)
+nuitka-crash-report.xml
+nuitka-crash-report*.xml
+
+# Local build verification logs
+build_err.log
+build_local.log
+
+# Coverage reports
+.coverage
+coverage.xml
+htmlcov/
+junit/
