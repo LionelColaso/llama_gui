@@ -1,0 +1,137 @@
+# ─── Shell ───────────────────────────────────────────────────────────────
+# Use cmd.exe on Windows (just defaults to sh which may not be in PATH).
+set shell := ["cmd.exe", "/C"]
+
+# ─── Global Variables ────────────────────────────────────────────────────
+# Shared flag values to keep recipes DRY and consistent.
+# Tests are separated by directory: tests/unit + tests/gui run
+# offline; tests/integration hits the live GitHub API and every
+# test in it skips itself (with a message) when there is no network.
+config_and_path := "--config pyproject.toml ."
+pytest_unit_gui := "--no-qt-log -s -ra tests/unit tests/gui"
+pytest_integration := "--no-qt-log -s -ra tests/integration"
+cov_opts := "--cov=app --cov-report=xml --cov-report=html --cov-report=term-missing --junitxml=junit/test-results.xml"
+
+# ─── Default Target ──────────────────────────────────────────────────────
+default: check
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Core Development
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Run the llama-gui application (GUI by default, CLI with args)
+run:
+    uv run python -m app
+
+# Run all tests (integration tests skip themselves when offline)
+test: dev-setup
+    uv run pytest {{pytest_unit_gui}} {{pytest_integration}} -q
+
+# Run tests with verbose output and short tracebacks
+test-verbose: dev-setup
+    uv run pytest {{pytest_unit_gui}} {{pytest_integration}} -v --tb=short
+
+# Run only the integration suite (skips itself when offline)
+test-integration: dev-setup
+    uv run pytest {{pytest_integration}} -v --tb=short
+
+# Run tests and emit an HTML coverage report + XML for CI uploads
+coverage: dev-setup
+    uv run pytest {{pytest_unit_gui}} {{cov_opts}}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Code Quality
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Run the full check suite: ruff format --check, ruff check, mypy, pyright,
+# jscpd, actionlint, pytest (order per AGENTS.md §15). Each recipe is individually runnable.
+check: ruff-format-check ruffcheck typecheck jscpd actionlint test-verbose
+
+# Verify formatting without modifying files (ruff format --check)
+ruff-format-check:
+    uv run ruff format --check {{config_and_path}}
+
+# check with ruff
+ruffcheck:
+    uv run ruff check {{config_and_path}}
+
+# Type-check with mypy and pyright
+typecheck: mypy pyright
+
+# Auto-fix formatting AND lint issues (ruff only)
+fix: format ruff-fix
+
+# fix with ruff
+ruff-fix:
+    uv run ruff check --fix {{config_and_path}}
+
+# Format code with ruff
+format:
+    uv run ruff format {{config_and_path}}
+
+# Run copy/paste detection (jscpd); skip gracefully if npx is unavailable
+jscpd:
+    where npx >nul 2>nul && (npx --yes jscpd@latest . --config .jscpd.json) || (echo jscpd skipped: npx not found)
+
+# Lint GitHub Actions workflow YAML locally (catches bad action refs, permission
+# scoping, typos before they fail in CI). Skip gracefully if not installed.
+actionlint:
+    where actionlint >nul 2>nul && (actionlint) || (echo actionlint skipped: not installed)
+
+# check with mypy
+mypy:
+    uv run mypy {{config_and_path}}
+
+# check with pyright
+pyright:
+    uv run pyright -p pyproject.toml .
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Build / Distribution
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Build llama-gui executable with Nuitka (runs checks first)
+build *ARGS='': check
+    uv run python scripts/build.py {{ARGS}}
+
+# Build llama-gui executable with a specific version string
+build-version VERSION: check
+    uv run python scripts/build.py --product-version "{{VERSION}}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Dependency Management
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Install all dependencies (including dev)
+dev-setup:
+    uv sync --locked --dev
+
+# Update all dependencies to their latest compatible versions
+update:
+    uv lock --upgrade
+
+# Remove all build artifacts, caches, and generated files
+clean:
+    uv run python scripts/clean.py
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Utilities
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Show help for build script
+build-help:
+    uv run python scripts/build.py --help
+
+# Print file / LOC / test counts
+stats:
+    uv run python scripts/stats.py
+
+# Regenerate mapping.md from the current tree
+mapping:
+    uv run python scripts/mapping.py
+
+# Diff the serverargs catalogue against llama-server --help. Pass a real binary
+# with `just check-server-args --binary <path>`; the default checks the
+# committed docs/reference snapshot.
+check-server-args *ARGS='':
+    uv run python scripts/check_server_args.py {{ARGS}}

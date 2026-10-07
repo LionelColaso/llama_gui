@@ -1,0 +1,66 @@
+name: Pytest
+
+# Tests are their own gate workflow (reusable + manual +
+# push/PR). Runs the whole suite headless (offscreen Qt); the
+# integration tests hit the live GitHub API and skip themselves
+# with a message when it is unreachable, so the gate stays green
+# through GitHub outages. The download tests pick the lightest
+# native prebuilt for the runner's OS and need no token (one is
+# used when present, for the higher API quota).
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Headless runners have no display server; pytest-qt needs the offscreen
+    # Qt platform or it fails to create QApplication.
+    env:
+      QT_QPA_PLATFORM: offscreen
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+
+      # Qt GUI tests need system GL libraries on headless Linux.
+      - name: Install Linux Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libglx-mesa0 libglib2.0-0 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0
+        shell: bash
+
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+
+      - name: Tests (integration auto-skips when GitHub is unreachable)
+        run: uv run pytest tests/unit tests/gui tests/integration -q -ra --cov=app --cov-report=term-missing --cov-report=xml --junitxml=junit/test-results.xml
+
+      - name: Upload coverage reports to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Upload pytest test results
+        uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: pytest-results-${{ matrix.os }}
+          path: junit/test-results.xml
