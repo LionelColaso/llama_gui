@@ -26,8 +26,14 @@ class LogsPage(QWidget):
         layout.addWidget(title)
 
         self._tabs = QTabWidget()
-        self._out_view = LogView(state_dir / "llama-server.out.log")
-        self._err_view = LogView(state_dir / "llama-server.err.log")
+        self._out_view = LogView(
+            state_dir / "llama-server.out.log",
+            latest_glob="llama-server-*.out.log",
+        )
+        self._err_view = LogView(
+            state_dir / "llama-server.err.log",
+            latest_glob="llama-server-*.err.log",
+        )
         self._tabs.addTab(self._out_view, "stdout")
         self._tabs.addTab(self._err_view, "stderr")
         layout.addWidget(self._tabs)

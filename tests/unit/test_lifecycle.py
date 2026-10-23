@@ -25,6 +25,7 @@ from app.lifecycle import (
     launch_llama_server,
     launch_settings,
     model_server_options,
+    prune_server_logs,
     read_log_tail,
     running_pids,
     stop_processes,
@@ -302,8 +303,8 @@ def test_launch_without_root_captures_logs_in_a_temp_dir(
         assert launch_llama_server(["llama-server"], "127.0.0.1", 8080) == 4321
         log_dir = getattr(lifecycle._SERVER_LOG_DIR, "dir", None)
         assert isinstance(log_dir, Path)
-        assert (log_dir / "llama-server.out.log").exists()
-        assert (log_dir / "llama-server.err.log").exists()
+        assert list(log_dir.glob("llama-server-*.out.log"))
+        assert list(log_dir.glob("llama-server-*.err.log"))
     finally:
         log_dir = getattr(lifecycle._SERVER_LOG_DIR, "dir", None)
         if log_dir is not None:
@@ -371,6 +372,62 @@ def test_read_log_tail_survives_an_unreadable_log(fake_root: Path) -> None:
     # raise OSError; the tail must come back empty, not crash.
     (state / "llama-server.err.log").mkdir()
     assert read_log_tail(fake_root) == []
+
+
+def test_each_launch_writes_its_own_log_pair(
+    fake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rapid relaunches must not truncate the previous launch's log."""
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+
+    for _ in range(3):
+        assert launch_llama_server(["llama-server"], "127.0.0.1", 8080, root=fake_root)
+
+    state = fake_root / "state"
+    assert len(list(state.glob("llama-server-*.out.log"))) == 3
+    assert len(list(state.glob("llama-server-*.err.log"))) == 3
+
+
+def test_prune_server_logs_keeps_the_newest_launches(fake_root: Path) -> None:
+    state = fake_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    for index in range(8):
+        stem = f"llama-server-20260101-0000{index:02d}"
+        (state / f"{stem}.out.log").write_text("out\n", encoding="utf-8")
+        (state / f"{stem}.err.log").write_text("err\n", encoding="utf-8")
+
+    pruned = prune_server_logs(state, keep=5)
+
+    out_logs = sorted(state.glob("llama-server-*.out.log"))
+    err_logs = sorted(state.glob("llama-server-*.err.log"))
+    assert len(out_logs) == 5
+    assert len(err_logs) == 5
+    assert len(pruned) == 6
+    assert out_logs[-1].name == "llama-server-20260101-000007.out.log"
+
+
+def test_read_log_tail_prefers_the_newest_launch(fake_root: Path) -> None:
+    state = fake_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "llama-server-20260101-000000.err.log").write_text(
+        "old launch\n", encoding="utf-8"
+    )
+    (state / "llama-server-20260102-000000.err.log").write_text(
+        "new launch\n", encoding="utf-8"
+    )
+
+    assert read_log_tail(fake_root) == ["new launch"]
+
+
+def test_read_log_tail_seeks_instead_of_reading_everything(fake_root: Path) -> None:
+    state = fake_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    big = state / "llama-server-20260101-000000.err.log"
+    big.write_text("".join(f"line {i}\n" for i in range(10_000)), encoding="utf-8")
+
+    tail = read_log_tail(fake_root, lines=3)
+
+    assert tail == ["line 9997", "line 9998", "line 9999"]
 
 
 def test_stop_processes_clean(fake_root: Path) -> None:

@@ -44,6 +44,13 @@ PIDS_FILE = "state/pids.json"
 #: Grace period before a still-running process is force-killed.
 _TERM_GRACE_SECONDS = 5.0
 
+#: How many launches' stdout/stderr pairs are kept in ``state/``.
+LOG_LAUNCHES_TO_KEEP = 5
+
+#: Read window sizes for :func:`read_log_tail`; the log is never read whole.
+_TAIL_BLOCK_BYTES = 64 * 1024
+_TAIL_MAX_BYTES = 4 * 1024 * 1024
+
 
 class LifecycleError(EngineError):
     """A launch/stop step failed; carries the contract exit code and log tail."""
@@ -338,6 +345,80 @@ def build_llama_server_args(
     return cmd
 
 
+def _new_log_paths(state_dir: Path) -> tuple[Path, Path]:
+    """Return a fresh ``(out, err)`` pair that cannot collide with an older launch.
+
+    A timestamped name means a relaunch never truncates a log that a previous
+    (possibly still running) server holds open -- on Windows that is a
+    ``PermissionError``, and it also makes every launch's output available for
+    post-mortem. The numeric suffix keeps rapid launches in the same second
+    apart.
+    """
+    base = f"llama-server-{time.strftime('%Y%m%d-%H%M%S')}"
+    attempt = 1
+    while True:
+        # Fixed-width: a suffixed name must still sort after the plain one.
+        stem = f"{base}-{attempt:03d}"
+        out_path = state_dir / f"{stem}.out.log"
+        err_path = state_dir / f"{stem}.err.log"
+        if not out_path.exists() and not err_path.exists():
+            return out_path, err_path
+        attempt += 1
+
+
+def prune_server_logs(state_dir: Path, keep: int = LOG_LAUNCHES_TO_KEEP) -> list[Path]:
+    """Delete all but the newest ``keep`` launches' log pairs.
+
+    Old files can still be held by a server that never exited; a failed delete
+    is ignored rather than allowed to disturb the launch that just succeeded.
+    """
+    keep = max(keep, 0)
+    pruned: list[Path] = []
+    for stream in ("out", "err"):
+        logs = sorted(state_dir.glob(f"llama-server-*.{stream}.log"))
+        stale = logs if keep == 0 else logs[:-keep]
+        for old in stale:
+            try:
+                old.unlink()
+            except OSError:
+                continue
+            pruned.append(old)
+    return pruned
+
+
+def _latest_log(state_dir: Path, name: str, stream: str) -> Path | None:
+    """The newest rotated log for ``stream``, or the legacy fixed name."""
+    rotated = sorted(state_dir.glob(f"{name}-*.{stream}.log"))
+    if rotated:
+        return rotated[-1]
+    legacy = state_dir / f"{name}.{stream}.log"
+    return legacy if legacy.exists() else None
+
+
+def _read_tail_lines(path: Path, lines: int) -> list[str]:
+    """Read only the last ``lines`` lines, seeking backwards from the end."""
+    if lines <= 0:
+        return []
+    try:
+        with path.open("rb") as handle:
+            offset = handle.seek(0, os.SEEK_END)
+            chunks: list[bytes] = []
+            newlines = 0
+            read = 0
+            while offset > 0 and newlines < lines and read < _TAIL_MAX_BYTES:
+                step = min(_TAIL_BLOCK_BYTES, offset, _TAIL_MAX_BYTES - read)
+                offset -= step
+                handle.seek(offset)
+                chunk = handle.read(step)
+                chunks.append(chunk)
+                newlines += chunk.count(b"\n")
+                read += step
+        data = b"".join(reversed(chunks))
+    except OSError:
+        return []
+    return data.decode("utf-8", errors="replace").splitlines()[-lines:]
+
+
 def launch_llama_server(
     cmd: list[str],
     host: str,
@@ -357,13 +438,12 @@ def launch_llama_server(
     """
     logger.info("launching llama-server: {}", " ".join(cmd))
 
-    out_log: IO[Any] | int
-    err_log: IO[Any] | int
+    out_log: IO[Any] | int = -1
+    err_log: IO[Any] | int = -1
     if root:
         log_dir = root / "state"
         log_dir.mkdir(parents=True, exist_ok=True)
-        out_log = (log_dir / "llama-server.out.log").open("w", encoding="utf-8")
-        err_log = (log_dir / "llama-server.err.log").open("w", encoding="utf-8")
+        out_path, err_path = _new_log_paths(log_dir)
     else:
         # CLI mode without a managed root: still capture logs so --verify and
         # --json can surface diagnostics. Use a temporary directory and store
@@ -371,11 +451,12 @@ def launch_llama_server(
         import tempfile
 
         log_dir = Path(tempfile.mkdtemp(prefix="llama-server-logs-"))
-        out_log = (log_dir / "llama-server.out.log").open("w", encoding="utf-8")
-        err_log = (log_dir / "llama-server.err.log").open("w", encoding="utf-8")
+        out_path, err_path = _new_log_paths(log_dir)
         _SERVER_LOG_DIR.dir = log_dir
 
     try:
+        out_log = out_path.open("w", encoding="utf-8")
+        err_log = err_path.open("w", encoding="utf-8")
         proc = subprocess.Popen(
             cmd,
             stdout=out_log,
@@ -393,6 +474,7 @@ def launch_llama_server(
                     handle.close()
 
     if root:
+        prune_server_logs(log_dir)
         pids = _read_pids(root)
         pids["llama_server"] = proc.pid
         _write_pids(root, pids)
@@ -444,8 +526,12 @@ def read_log_tail(
     name: str = "llama-server",
     lines: int = 20,
 ) -> list[str]:
-    """Read the tail of llama-server logs. When ``root`` is None (CLI without managed root),"""
-    """use ``state_dir`` instead of ``root / "state"`` so captured logs are still readable."""
+    """Read the tail of llama-server logs.
+
+    When ``root`` is None (CLI without a managed root), use ``state_dir``
+    instead of ``root / "state"`` so captured logs are still readable. Only the
+    newest launch's log is read, and only a bounded window from its end.
+    """
     if state_dir is None:
         if root is not None:
             state_dir = root / "state"
@@ -454,20 +540,14 @@ def read_log_tail(
     if state_dir is None:
         return []
     # Prefer stderr (diagnostics), but fall back to stdout so a server that only
-    # writes to stdout still yields its log tail (a Path is truthy even when the
-    # file is missing, so an explicit existence check is required for the fallback).
-    err_path = state_dir / f"{name}.err.log"
-    out_path = state_dir / f"{name}.out.log"
-    log_path = (
-        err_path if err_path.exists() else (out_path if out_path.exists() else None)
+    # writes to stdout still yields its log tail. The newest per-launch file
+    # wins; the fixed legacy names are still read for pre-rotation installs.
+    log_path = _latest_log(state_dir, name, "err") or _latest_log(
+        state_dir, name, "out"
     )
     if log_path is None:
         return []
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    return text.splitlines()[-lines:]
+    return _read_tail_lines(log_path, lines)
 
 
 # ─── Stop ─────────────────────────────────────────────────────────────────
