@@ -95,6 +95,25 @@ def _write_pids(root: Path, data: dict[str, Any]) -> None:
     pids_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _reap(pid: int) -> None:
+    """Collect a zombie child on POSIX; harmless for non-children."""
+    if is_windows() or not hasattr(os, "waitpid"):
+        return
+    with contextlib.suppress(OSError):
+        getattr(os, "waitpid")(pid, getattr(os, "WNOHANG"))  # noqa: B009
+
+
+def _pid_alive(pid: int) -> bool:
+    """Liveness after collecting an exited child.
+
+    On POSIX an exited child stays a zombie -- and still answers
+    ``kill(pid, 0)`` -- until it is waited for, so ``_pid_exists`` alone reports
+    a dead server as running (status, stop and the next launch all believe it).
+    """
+    _reap(pid)
+    return _pid_exists(pid)
+
+
 if sys.platform == "win32":
     import ctypes
 
@@ -379,6 +398,16 @@ def launch_llama_server(
         _write_pids(root, pids)
 
     if verify and not verify_launch(proc.pid, host, port):
+        # A spawn is not a liveness claim: stop the child before failing.
+        # Otherwise a retry can start a second server and overwrite the pid
+        # record, untracking the first one so Stop can never reach it.
+        logger.warning("llama-server pid {} never listened; stopping it", proc.pid)
+        _stop_pid(proc.pid)
+        if root:
+            pids = _read_pids(root)
+            if pids.get("llama_server") == proc.pid:
+                pids["llama_server"] = None
+                _write_pids(root, pids)
         return None
 
     return proc.pid
@@ -404,7 +433,7 @@ def verify_launch(
     port: int,
     timeout: float = 8.0,
 ) -> bool:
-    if not _pid_exists(pid):
+    if not _pid_alive(pid):
         return False
     return wait_for_port(host, port, timeout)
 
@@ -444,33 +473,23 @@ def read_log_tail(
 # ─── Stop ─────────────────────────────────────────────────────────────────
 
 
-def _reap(pid: int) -> None:
-    """Collect a zombie child on POSIX; harmless for non-children."""
-    if is_windows() or not hasattr(os, "waitpid"):
-        return
-    with contextlib.suppress(OSError):
-        getattr(os, "waitpid")(pid, getattr(os, "WNOHANG"))  # noqa: B009
-
-
 def _stop_pid(pid: int, grace: float = _TERM_GRACE_SECONDS) -> bool:
     """Ask a process to exit, escalating to a hard kill after ``grace`` seconds.
 
     The caller can shorten (or remove) the grace period. GUI shutdown uses a
     short one, because it must not hold the event loop while waiting.
     """
-    if not _pid_exists(pid):
+    if not _pid_alive(pid):
         return False
     _terminate_pid(pid, force=False)
     if grace > 0:
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
-            _reap(pid)
-            if not _pid_exists(pid):
+            if not _pid_alive(pid):
                 return True
             time.sleep(0.1)
     _terminate_pid(pid, force=True)
-    _reap(pid)
-    return not _pid_exists(pid)
+    return not _pid_alive(pid)
 
 
 def stop_processes(
@@ -508,7 +527,7 @@ def stop_processes(
     # had nothing to stop (a true no-op -- avoids creating an empty file), or when
     # a target is still alive because we failed to stop it (keep the record so a
     # later stop can retry).
-    still_alive = [pid for pid in targets if _pid_exists(pid)]
+    still_alive = [pid for pid in targets if _pid_alive(pid)]
     if targets and not still_alive:
         _write_pids(root, {"llama_server": None, "servers": {}})
 
@@ -536,7 +555,7 @@ def running_pids(root: Path) -> list[int]:
     server_pid = cast("int | None", pids.get("llama_server"))
     servers = cast("dict[str, int]", pids.get("servers", {}) or {})
     candidates: list[int | None] = [server_pid, *servers.values()]
-    return [p for p in candidates if isinstance(p, int) and _pid_exists(p)]
+    return [p for p in candidates if isinstance(p, int) and _pid_alive(p)]
 
 
 __all__ = [

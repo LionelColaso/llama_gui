@@ -618,8 +618,10 @@ class Orchestrator:
                 self.log_tail(20),
             )
         # A previously launched server still holding the port would make the new
-        # one fail to bind, so stop our own instance first (never others').
-        if check_port(self.cfg.host, self.cfg.port):
+        # one fail to bind; one still loading the model is just as bad, because
+        # this launch would overwrite its pid record and orphan it. Stop our own
+        # instance first (never others').
+        if check_port(self.cfg.host, self.cfg.port) or running_pids(self.root):
             self._stop_locked()
         cmd = self._server_args_for(resolved.path, str(model))
         return launch_llama_server(
@@ -630,13 +632,15 @@ class Orchestrator:
             verify=verify,
         )
 
-    def stop(self, grace: float | None = None) -> StopData:
+    def stop(self, grace: float | None = None, lock_timeout: float = 0.0) -> StopData:
         """Stop the server. ``grace`` caps how long each process may take to exit.
 
         The default is the engine's normal grace period. GUI shutdown passes a
-        short one so closing the window cannot stall the event loop.
+        short one so closing the window cannot stall the event loop, plus a
+        bounded ``lock_timeout``: an install or download can hold the lock for
+        minutes, and quitting must not leave the server running behind it.
         """
-        with mutation_lock(self.root):
+        with mutation_lock(self.root, timeout=lock_timeout):
             return self._stop_locked(grace=grace)
 
     def _stop_locked(self, grace: float | None = None) -> StopData:

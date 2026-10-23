@@ -115,6 +115,28 @@ def test_running_pids_tolerates_malformed_file(fake_root: Path) -> None:
     assert running_pids(fake_root) == []
 
 
+def test_running_pids_reaps_before_reporting_a_child(
+    fake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zombie child still answers kill(0); it must be collected first."""
+    from app import lifecycle
+
+    _write_pids(fake_root, {"llama_server": 4242, "servers": {}})
+    reaped: list[int] = []
+
+    def _reap(pid: int) -> None:
+        reaped.append(pid)
+
+    def _pid_exists(pid: int) -> bool:
+        return False
+
+    monkeypatch.setattr(lifecycle, "_reap", _reap)
+    monkeypatch.setattr(lifecycle, "_pid_exists", _pid_exists)
+
+    assert running_pids(fake_root) == []
+    assert reaped == [4242]
+
+
 def test_stop_processes_tolerates_malformed_file(fake_root: Path) -> None:
     _write_raw_pids(fake_root, "[1, 2]")
     result = stop_processes(fake_root)
@@ -237,6 +259,36 @@ def test_launch_with_verify_returns_none_when_port_never_comes_up(
         )
         is None
     )
+
+
+def test_launch_verify_failure_stops_the_child_and_clears_the_pid(
+    fake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import lifecycle
+
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+
+    def _never_verified(*args: object) -> bool:
+        return False
+
+    monkeypatch.setattr(lifecycle, "verify_launch", _never_verified)
+
+    stopped: list[int] = []
+
+    def _fake_stop(pid: int, grace: float = 0.0) -> bool:
+        stopped.append(pid)
+        return True
+
+    monkeypatch.setattr(lifecycle, "_stop_pid", _fake_stop)
+
+    assert (
+        launch_llama_server(
+            ["llama-server"], "127.0.0.1", 8080, root=fake_root, verify=True
+        )
+        is None
+    )
+    assert stopped == [4321]
+    assert _read_pids(fake_root)["llama_server"] is None
 
 
 def test_launch_without_root_captures_logs_in_a_temp_dir(

@@ -480,3 +480,21 @@ def test_close_survives_a_failing_server_stop(
         qtbot.addWidget(w)
         assert w.close()
     assert fake_orch.stop.called
+
+
+def test_close_stops_recorded_pids_when_the_lock_is_held(
+    qtbot: QtBot, fake_orch: MagicMock
+) -> None:
+    """Shutdown must not leave the server behind when a mutation holds the lock."""
+    from app.locking import LockAcquisitionError
+    from app.schemas import ExitCode
+
+    fake_orch.stop.side_effect = LockAcquisitionError(ExitCode.LOCK_CONFLICT, "busy")
+    with (
+        patch("app.gui.main_window.Orchestrator", return_value=fake_orch),
+        patch("app.gui.main_window.stop_processes", return_value={}) as stop,
+    ):
+        w = MainWindow()
+        qtbot.addWidget(w)
+        assert w.close()
+    assert stop.called

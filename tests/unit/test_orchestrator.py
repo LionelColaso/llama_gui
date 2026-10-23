@@ -731,6 +731,26 @@ def test_launch_holds_the_mutation_lock(tmp_path: Path) -> None:
     assert spy.observed == [True], "launch spawned the server without the lock held"
 
 
+def test_launch_stops_a_recorded_loading_server(tmp_path: Path) -> None:
+    """A live-but-not-yet-listening server is replaced, not orphaned."""
+    orch = Orchestrator(AppConfig(root=str(tmp_path)))
+    spy = _LockSpy(tmp_path)
+    stopped: list[int] = []
+
+    def _stop(*args: object, **kwargs: object) -> dict[str, object]:
+        stopped.append(4242)
+        return {"stopped_pids": [4242], "port_free": True, "still_listening": False}
+
+    with contextlib.ExitStack() as stack:
+        for ctx in _launch_patches(orch, spy):
+            stack.enter_context(ctx)
+        stack.enter_context(patch("app.orchestrator.running_pids", return_value=[4242]))
+        stack.enter_context(patch("app.orchestrator.stop_processes", side_effect=_stop))
+        assert orch.launch() == 4242
+
+    assert stopped, "a recorded live server was not stopped before relaunch"
+
+
 def test_stop_holds_the_mutation_lock(tmp_path: Path) -> None:
     orch = Orchestrator(AppConfig(root=str(tmp_path)))
     spy = _LockSpy(tmp_path)

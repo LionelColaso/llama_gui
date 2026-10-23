@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from loguru import logger
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import (
@@ -15,8 +16,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import AppConfig
+from ..lifecycle import stop_processes
 from ..orchestrator import Orchestrator
-from ..schemas import InstallData
+from ..schemas import EngineError, InstallData
 from .dialogs.first_run import FirstRunDialog
 from .dialogs.model_server_options import ModelServerOptionsDialog
 from .pages.dashboard import DashboardHome
@@ -30,6 +32,10 @@ from .worker_pool import EngineWorker, WorkerPool
 #: because closeEvent runs on the GUI thread: a stubborn process is force-killed
 #: once this elapses, so a normal shutdown never stalls the event loop.
 SHUTDOWN_GRACE_SECONDS = 0.5
+
+#: How long shutdown waits for the mutation lock before stopping the pids in
+#: ``state/pids.json`` without it.
+SHUTDOWN_LOCK_WAIT_SECONDS = 2.0
 
 #: Sidebar order; the QStackedWidget below is built in exactly this order, so
 #: ``_PAGES.index(name)`` is the row that shows that page.
@@ -246,8 +252,31 @@ class MainWindow(QWidget):
         # stubborn server is terminated quickly rather than freezing the window
         # as it closes.
         try:
-            self._orch.stop(grace=SHUTDOWN_GRACE_SECONDS)
-        except Exception:  # noqa: BLE001, S110 - never block shutdown on a stop error
-            pass
+            self._orch.stop(
+                grace=SHUTDOWN_GRACE_SECONDS,
+                lock_timeout=SHUTDOWN_LOCK_WAIT_SECONDS,
+            )
+        except EngineError as exc:
+            # An install/download still holds the mutation lock. Stopping only
+            # the pids we recorded is idempotent and writes nothing but that
+            # record, so it beats leaving the server (and its port) behind.
+            logger.warning("shutdown stop could not take the lock: {}", exc)
+            self._stop_recorded_processes()
+        except Exception:  # noqa: BLE001 - never block shutdown on a stop error
+            logger.opt(exception=True).error("stop at shutdown failed")
 
         super().closeEvent(event)
+
+    def _stop_recorded_processes(self) -> None:
+        """Best-effort stop used when the mutation lock is held at shutdown."""
+        try:
+            result = stop_processes(
+                self._orch.root,
+                host=self._orch.cfg.host,
+                port=self._orch.cfg.port,
+                grace=SHUTDOWN_GRACE_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - shutdown is best effort
+            logger.opt(exception=True).error("fallback stop at shutdown failed")
+            return
+        logger.info("fallback stop at shutdown: {}", result)
