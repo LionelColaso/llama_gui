@@ -16,7 +16,7 @@ dev = [
   "pytest-qt>=4.5",
   "pytest-mock>=3.17",
   "pytest-cov>=7.1",
-  "ruff>=0.17",
+  "ruff>=0.17.2",
   "mypy>=2.4",
   "pyright>=1.1",
   "ordered-set",
