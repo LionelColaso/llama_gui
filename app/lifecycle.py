@@ -19,6 +19,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -341,7 +343,10 @@ def build_llama_server_args(
     if server_options:
         cmd.extend(options_to_cli(server_options))
     if extra_args:
-        cmd.extend(extra_args.split())
+        # ``posix=False`` keeps Windows-style quoted paths whole
+        # (e.g. ``--chat-template "D:\My Files\t.jinja"`` survives as one
+        # argument); shlex strips the surrounding quotes.
+        cmd.extend(shlex.split(extra_args, posix=False))
     return cmd
 
 
@@ -465,6 +470,7 @@ def launch_llama_server(
             close_fds=True,
             **_spawn_kwargs(),
         )
+        _CLI_LOG_DIRS[log_dir] = proc.pid
     except OSError as e:
         raise LifecycleError(1, f"Failed to launch llama-server: {e}") from e
     finally:
@@ -611,6 +617,13 @@ def stop_processes(
     if targets and not still_alive:
         _write_pids(root, {"llama_server": None, "servers": {}})
 
+    # Reap CLI-mode temporary log directories whose server is no longer running,
+    # so CLI launches never leak a temp dir (see A-4).
+    for log_dir, pid in list(_CLI_LOG_DIRS.items()):
+        if not _pid_alive(pid):
+            shutil.rmtree(log_dir, ignore_errors=True)
+            _CLI_LOG_DIRS.pop(log_dir, None)
+
     # A port still accepting connections after our processes are gone is held
     # by something we did not spawn: report it, never kill it.
     port_free = True
@@ -656,3 +669,7 @@ __all__ = [
 #: Per-thread temporary log directory used when ``root=None`` so that
 #: ``read_log_tail`` can return captured output in CLI mode.
 _SERVER_LOG_DIR = threading.local()
+
+#: CLI-mode temporary log directories keyed by the server pid that owns them,
+#: so :func:`stop_processes` can remove them once the server is gone.
+_CLI_LOG_DIRS: dict[Path, int] = {}

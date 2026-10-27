@@ -53,6 +53,7 @@ from .links import link_current, remove_link
 from .locking import mutation_lock
 from .model_store import (
     ModelDownloadError,
+    _rel_model_name,
     clear_model_cache,
     download_model,
     list_models,
@@ -992,7 +993,15 @@ class Orchestrator:
         The model name picks its configuration: the globals, or its own values
         when it has them.
         """
-        settings = launch_settings(self.cfg, Path(model_path).name)
+        # Model identity is the path relative to the models dir (``_rel_model_name``),
+        # which is what the GUI/CLI store per-model options under. Fall back to the
+        # basename when the path is not under the models dir (e.g. the "<model>"
+        # placeholder) so pre-existing basename-keyed entries still apply.
+        try:
+            model_key = _rel_model_name(Path(model_path), self.cfg.models_dir_path)
+        except ValueError:
+            model_key = Path(model_path).name
+        settings = launch_settings(self.cfg, model_key)
         return build_llama_server_args(
             exe_path=exe_path,
             model_path=model_path,

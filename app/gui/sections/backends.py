@@ -342,6 +342,7 @@ class BackendsSection(QWidget):
             action,
             "Launching�?�" if action == "launch" else "Restarting�?�",
             on_done=self._after_action,
+            verify=True,
         )
 
     def _on_model_chosen(self, _data: Any, *, action: str, chosen: str) -> None:
