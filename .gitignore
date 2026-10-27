@@ -19,3 +19,6 @@ build_local.log
 coverage.xml
 htmlcov/
 junit/
+
+# serena
+.serena/
