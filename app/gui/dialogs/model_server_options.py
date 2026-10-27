@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from ...lifecycle import uses_global_server_config
 from ..theme import COLORS
 from ..widgets.server_options_editor import ServerOptionsEditor
+from ..worker_pool import dispatch
 
 #: Label of the checkbox that keeps a model on the global configuration.
 USE_GLOBAL_LABEL = "Use global server config"
@@ -128,19 +129,36 @@ class ModelServerOptionsDialog(QDialog):
 
     def _save(self) -> None:
         if self.uses_global():
-            self._orch.reset_model_server_config(self._model)
-        else:
-            try:
-                options = self._editor.collect_model()
-            except ValueError as exc:  # pragma: no cover - editors validate first
-                self._status.setText(str(exc))
-                return
-            self._orch.save_model_server_config(self._model, options)
+            dispatch(
+                self._orch,
+                "reset_model_server_config",
+                self._model,
+                on_result=self._on_saved,
+            )
+            return
+        try:
+            options = self._editor.collect_model()
+        except ValueError as exc:  # pragma: no cover - editors validate first
+            self._status.setText(str(exc))
+            return
+        dispatch(
+            self._orch,
+            "save_model_server_config",
+            self._model,
+            options,
+            on_result=self._on_saved,
+        )
+
+    def _on_saved(self, _data: Any) -> None:
         self.accept()
 
     def _reset(self) -> None:
-        self._orch.reset_model_server_config(self._model)
-        self.accept()
+        dispatch(
+            self._orch,
+            "reset_model_server_config",
+            self._model,
+            on_result=self._on_saved,
+        )
 
 
 __all__ = ["RESET_LABEL", "USE_GLOBAL_LABEL", "ModelServerOptionsDialog"]

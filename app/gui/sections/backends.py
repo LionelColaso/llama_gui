@@ -33,7 +33,7 @@ from ..theme import COLORS
 from ..widgets.backend_card import BackendCard
 from ..widgets.progress_bar import ProgressWidget
 from ..widgets.source_badge import SourceBadge
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 
 class BinaryRow(QGroupBox):
@@ -201,16 +201,20 @@ class BackendsSection(QWidget):
         if self._busy:
             return
         self._busy = True
-        worker = EngineWorker(self._orch, "status")
-        worker.signals.finished.connect(self._on_status)
-        worker.signals.error.connect(self._on_status_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "status",
+            on_result=self._on_status,
+            on_error=self._on_status_error,
+        )
 
     def _resolve(self) -> None:
-        worker = EngineWorker(self._orch, "resolve")
-        worker.signals.finished.connect(self._on_resolved)
-        worker.signals.error.connect(self._on_status_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "resolve",
+            on_result=self._on_resolved,
+            on_error=self._on_status_error,
+        )
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         for btn in self._action_buttons:
@@ -228,18 +232,15 @@ class BackendsSection(QWidget):
     ) -> None:
         self._set_actions_enabled(False)
         self._progress.start_operation(label, control=control)
-        worker = EngineWorker(
+        dispatch(
             self._orch,
             action,
             progress_callback=progress_callback,
             control=control,
+            on_result=functools.partial(self._on_action_done, on_done=on_done),
+            on_error=self._on_action_error,
             **kwargs,
         )
-        worker.signals.finished.connect(
-            functools.partial(self._on_action_done, on_done=on_done)
-        )
-        worker.signals.error.connect(self._on_action_error)
-        WorkerPool.instance().start(worker)
 
     def _on_action_done(self, data: Any, on_done: Any = None) -> None:
         self._set_actions_enabled(True)
@@ -327,15 +328,27 @@ class BackendsSection(QWidget):
             if chosen is None:
                 self._status_label.setText("Launch cancelled — no model selected.")
                 return
-            try:
-                self._orch.set_active_model(chosen)
-            except EngineError as exc:
-                self._status_label.setText(f"Error: {exc}")
-                return
-            self._status_label.setText(f"Active model: {chosen}")
+            dispatch(
+                self._orch,
+                "set_active_model",
+                chosen,
+                on_result=functools.partial(
+                    self._on_model_chosen, action=action, chosen=chosen
+                ),
+                on_error=self._on_action_error,
+            )
+            return
         self._start(
             action,
-            "Launching…" if action == "launch" else "Restarting…",
+            "Launching�?�" if action == "launch" else "Restarting�?�",
+            on_done=self._after_action,
+        )
+
+    def _on_model_chosen(self, _data: Any, *, action: str, chosen: str) -> None:
+        self._status_label.setText(f"Active model: {chosen}")
+        self._start(
+            action,
+            "Launching�?�" if action == "launch" else "Restarting�?�",
             on_done=self._after_action,
         )
 

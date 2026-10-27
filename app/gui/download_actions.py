@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ..download import DownloadControl
 from .widgets.progress_bar import ProgressWidget
-from .worker_pool import EngineWorker, WorkerPool
+from .worker_pool import dispatch
 
 
 def add_list_footer(
@@ -62,16 +62,15 @@ class DownloadActionsMixin:
         """Launch ``download_model`` for *url* with progress + error wiring."""
         control = DownloadControl()
         self._progress.start_operation(status_text, control=control)
-        worker = EngineWorker(
+        dispatch(
             self._orch,
             "download_model",
             progress_callback=self._on_progress,
             control=control,
             url=url,
+            on_result=self._on_downloaded,
+            on_error=self._on_download_error,
         )
-        worker.signals.finished.connect(self._on_downloaded)
-        worker.signals.error.connect(self._on_download_error)
-        WorkerPool.instance().start(worker)
 
     def _on_downloaded(self, data: Any) -> None:
         """Host class overrides: surfaces the finished download and reloads."""

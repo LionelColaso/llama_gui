@@ -22,8 +22,7 @@ def _record_workers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Route every worker the section (or its mixin) starts into one list."""
     return record_workers(
         monkeypatch,
-        "app.gui.sections.downloads.WorkerPool",
-        "app.gui.download_actions.WorkerPool",
+        "app.gui.worker_pool.WorkerPool",
     )
 
 

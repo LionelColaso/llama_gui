@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from loguru import logger
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
@@ -26,7 +28,7 @@ from .pages.logs import LogsPage
 from .pages.models import ModelsPage
 from .pages.server_args import ServerArgsPage
 from .pages.settings import SettingsPage
-from .worker_pool import EngineWorker, WorkerPool
+from .worker_pool import dispatch
 
 #: Grace period used when stopping the server as the window closes. Short
 #: because closeEvent runs on the GUI thread: a stubborn process is force-killed
@@ -122,9 +124,12 @@ class MainWindow(QWidget):
 
         # "Launch server on start": fire-and-forget launch in the background.
         if self._cfg.launch_on_start:
-            worker = EngineWorker(self._orch, "launch", verify=False)
-            worker.signals.error.connect(self._notify_update_error)
-            WorkerPool.instance().start(worker)
+            dispatch(
+                self._orch,
+                "launch",
+                verify=False,
+                on_error=self._notify_update_error,
+            )
 
         # "Start minimized": hide the window instead of showing it.
         if self._cfg.start_minimized:
@@ -163,11 +168,23 @@ class MainWindow(QWidget):
         Uses ``first_run_needed()`` rather than ``status().ready``: ready only
         means a file exists, so a broken binary (wrong arch, missing CUDA
         runtime, quarantine) would otherwise suppress the dialog and leave the
-        user with no way forward. The validating probe runs once here, not on
-        the dashboard's poll.
+        user with no way forward. The validating probe runs once here, on the
+        worker pool, not on the GUI thread and not on the dashboard's poll.
         """
-        if self._orch.first_run_needed():
+        dispatch(
+            self._orch,
+            "first_run_needed",
+            on_result=self._on_first_run_checked,
+            on_error=self._on_first_run_failed,
+        )
+
+    def _on_first_run_checked(self, needed: Any) -> None:
+        if needed:
             FirstRunDialog(self._orch, self).exec()
+        self._dashboard.start_refresh()
+
+    def _on_first_run_failed(self, msg: str) -> None:
+        logger.warning("first-run check failed: {}", msg)
         self._dashboard.start_refresh()
 
     def _switch_page(self, index: int) -> None:
@@ -190,10 +207,13 @@ class MainWindow(QWidget):
             self._server_args.set_scope(dialog.model)
 
     def _auto_update(self) -> None:
-        worker = EngineWorker(self._orch, "update", progress_callback=None)
-        worker.signals.finished.connect(self._notify_update)
-        worker.signals.error.connect(self._notify_update_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "update",
+            progress_callback=None,
+            on_result=self._notify_update,
+            on_error=self._notify_update_error,
+        )
 
     def _notify_update(self, data: object) -> None:
         if self._tray is None:

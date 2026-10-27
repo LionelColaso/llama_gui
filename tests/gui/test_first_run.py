@@ -157,7 +157,7 @@ def _pool_recorder(monkeypatch: Any) -> list[Any]:
         def start(cls, worker: Any) -> None:
             started.append(worker)
 
-    monkeypatch.setattr("app.gui.dialogs.first_run.WorkerPool", _PoolRecorder)
+    monkeypatch.setattr("app.gui.worker_pool.WorkerPool", _PoolRecorder)
     return started
 
 

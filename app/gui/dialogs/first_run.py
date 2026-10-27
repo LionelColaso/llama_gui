@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from ...download import DownloadControl
 from ..payload import as_payload
 from ..widgets.progress_bar import ProgressWidget
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 
 class FirstRunDialog(QDialog):
@@ -70,29 +70,36 @@ class FirstRunDialog(QDialog):
         self._download_btn.setEnabled(False)
         control = DownloadControl()
         self._progress.start_operation("Downloading…", control=control)
-        worker = EngineWorker(
+        dispatch(
             self._orch,
             "bootstrap",
             progress_callback=self._on_progress,
             control=control,
+            on_result=self._on_finished,
+            on_error=self._on_error,
         )
-        worker.signals.finished.connect(self._on_finished)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
 
     def _use_os(self) -> None:
         self._use_os_btn.setEnabled(False)
-        self._orch.save_config(
+        dispatch(
+            self._orch,
+            "save_config",
             {
                 "use_os_llama_server": True,
                 "first_run_complete": True,
-            }
+            },
+            on_result=self._check_os_install,
+            on_error=self._on_error,
         )
         self._status.setText("Saved. Checking the binaries…")
-        worker = EngineWorker(self._orch, "resolve")
-        worker.signals.finished.connect(self._on_resolved)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+
+    def _check_os_install(self, _data: Any) -> None:
+        dispatch(
+            self._orch,
+            "resolve",
+            on_result=self._on_resolved,
+            on_error=self._on_error,
+        )
 
     def _skip(self) -> None:
         """Close without setup, but do not nag on every launch."""

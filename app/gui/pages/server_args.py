@@ -36,7 +36,7 @@ from ...serverargs import SERVER_ARGS, validate_options
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.server_options_editor import ServerOptionsEditor
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 #: Label of the scope that edits the global defaults every model starts from.
 GLOBAL_SCOPE_LABEL = "Global defaults"
@@ -164,10 +164,12 @@ class ServerArgsPage(QWidget):
         known.discard("")
         self._scope_models = sorted(known)
         self._apply_scope(self._scope)
-        worker = EngineWorker(self._orch, "list_models")
-        worker.signals.finished.connect(self._on_models)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "list_models",
+            on_result=self._on_models,
+            on_error=self._on_error,
+        )
 
     def _on_models(self, data: Any) -> None:
         names = _model_names(data) | set(self._orch.cfg.model_server_options)
@@ -196,27 +198,53 @@ class ServerArgsPage(QWidget):
             self._status_label.setText(next(iter(errors.values())))
             return
         if scope is None:
-            self._orch.save_config(data)
-            self._status_label.setText("Server options saved.")
+            dispatch(
+                self._orch,
+                "save_config",
+                data,
+                on_result=self._on_global_saved,
+                on_error=self._on_error,
+            )
         else:
-            self._orch.save_model_server_config(scope, cast("dict[str, str]", data))
             count = len(options)
-            self._status_label.setText(
-                f"Saved for {scope}: {count} option"
-                f"{'' if count == 1 else 's'} of its own."
+
+            def _saved_own(_data: Any) -> None:
+                self._status_label.setText(
+                    f"Saved for {scope}: {count} option"
+                    f"{'' if count == 1 else 's'} of its own."
+                )
+
+            dispatch(
+                self._orch,
+                "save_model_server_config",
+                scope,
+                cast("dict[str, str]", data),
+                on_result=_saved_own,
+                on_error=self._on_error,
             )
         self._apply_scope(scope)
+
+    def _on_global_saved(self, _data: Any) -> None:
+        self._status_label.setText("Server options saved.")
 
     def _reset_all(self) -> None:
         if self._scope is not None:
             # The model's own configuration becomes empty: every option at the
             # binary's default. It does *not* start following the globals, which
             # is what the popup's checkbox is for.
-            self._orch.reset_model_server_config(self._scope)
-            self._status_label.setText(
-                f"{self._scope} now uses its own default values."
+            scope = self._scope
+
+            def _reset_done(_data: Any) -> None:
+                self._status_label.setText(f"{scope} now uses its own default values.")
+
+            dispatch(
+                self._orch,
+                "reset_model_server_config",
+                scope,
+                on_result=_reset_done,
+                on_error=self._on_error,
             )
-            self._apply_scope(self._scope)
+            self._apply_scope(scope)
             return
         self._editor.clear_to_defaults()
         self._status_label.setText("All values cleared — save to apply.")

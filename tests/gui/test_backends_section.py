@@ -18,7 +18,24 @@ def _record_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[Any]:
     """Route every worker the section starts into one list."""
-    return record_workers(monkeypatch, "app.gui.sections.backends.WorkerPool")
+    return record_workers(monkeypatch, "app.gui.worker_pool.WorkerPool")
+
+
+def _choose_model_and_get_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    page: BackendsSection,
+    started: list[Any],
+) -> Any:
+    """Stub the picker to choose "a.gguf", launch, and return the set-active worker."""
+    with monkeypatch.context() as m:
+        dialog_cls = MagicMock()
+        dialog_cls.return_value.exec.return_value = 1
+        dialog_cls.return_value.selected_model.return_value = "a.gguf"
+        m.setattr("app.gui.sections.backends.ModelPickerDialog", dialog_cls)
+        page._do_launch()
+    workers = [w for w in started if w._action == "set_active_model"]
+    assert len(workers) == 1
+    return workers[0]
 
 
 def _two_models() -> ModelsData:
@@ -357,16 +374,12 @@ class TestBackendsSection:
 
         assert page._models_needing_a_choice() != []
 
-        with monkeypatch.context() as m:
-            dialog_cls = MagicMock()
-            dialog_cls.return_value.exec.return_value = 1
-            dialog_cls.return_value.selected_model.return_value = "a.gguf"
-            m.setattr("app.gui.sections.backends.ModelPickerDialog", dialog_cls)
-            page._do_launch()
-
+        set_active = _choose_model_and_get_worker(monkeypatch, page, started)
+        assert set_active._args == ("a.gguf",)
+        set_active.run_sync()
         fake_orch.set_active_model.assert_called_once_with("a.gguf")
         assert "Active model: a.gguf" in page._status_label.text()
-        assert started[0]._action == "launch"
+        assert [w._action for w in started] == ["set_active_model", "launch"]
 
     def test_launch_cancelled_leaves_the_model_alone(
         self,
@@ -401,15 +414,10 @@ class TestBackendsSection:
         qtbot.addWidget(page)
         started = _record_workers(monkeypatch)
 
-        with monkeypatch.context() as m:
-            dialog_cls = MagicMock()
-            dialog_cls.return_value.exec.return_value = 1
-            dialog_cls.return_value.selected_model.return_value = "a.gguf"
-            m.setattr("app.gui.sections.backends.ModelPickerDialog", dialog_cls)
-            page._do_launch()
-
+        set_active = _choose_model_and_get_worker(monkeypatch, page, started)
+        set_active.run_sync()
         assert "Error: " in page._status_label.text()
-        assert started == []
+        assert [w._action for w in started] == ["set_active_model"]
 
     def test_no_choice_when_a_model_is_active(
         self,

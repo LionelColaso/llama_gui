@@ -31,7 +31,7 @@ from ..download_actions import DownloadActionsMixin, add_list_footer
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.progress_bar import ProgressWidget, _human
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 
 class _PendingRow(QWidget):
@@ -135,10 +135,12 @@ class DownloadsSection(DownloadActionsMixin, QWidget):
     # ─── Loading ─────────────────────────────────────────────────────────
 
     def _load(self) -> None:
-        worker = EngineWorker(self._orch, "pending_downloads")
-        worker.signals.finished.connect(self._on_list)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "pending_downloads",
+            on_result=self._on_list,
+            on_error=self._on_error,
+        )
 
     def _clear_rows(self) -> None:
         while self._list_layout.count():
@@ -181,15 +183,14 @@ class DownloadsSection(DownloadActionsMixin, QWidget):
             self._progress.start_operation(
                 f"Resuming {task.get('name', 'download')}…", control=control
             )
-            worker = EngineWorker(
+            dispatch(
                 self._orch,
                 "bootstrap",
                 progress_callback=self._on_progress,
                 control=control,
+                on_result=self._on_downloaded,
+                on_error=self._on_download_error,
             )
-            worker.signals.finished.connect(self._on_downloaded)
-            worker.signals.error.connect(self._on_download_error)
-            WorkerPool.instance().start(worker)
         else:
             self._start_download_worker(
                 str(task.get("url", "")),
@@ -197,12 +198,13 @@ class DownloadsSection(DownloadActionsMixin, QWidget):
             )
 
     def _discard_task(self, task: dict[str, Any]) -> None:
-        worker = EngineWorker(
-            self._orch, "discard_download", dest=str(task.get("dest", ""))
+        dispatch(
+            self._orch,
+            "discard_download",
+            dest=str(task.get("dest", "")),
+            on_result=self._on_list,
+            on_error=self._on_error,
         )
-        worker.signals.finished.connect(self._on_list)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
 
     # ─── Signals ──────────────────────────────────────────────────────────
 

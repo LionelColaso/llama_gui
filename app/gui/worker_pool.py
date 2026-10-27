@@ -37,6 +37,7 @@ class EngineWorker(QRunnable):
         self,
         orch: Orchestrator,
         action: str,
+        *args: Any,
         progress_callback: Any = None,
         control: Any = None,
         **kwargs: Any,
@@ -44,6 +45,7 @@ class EngineWorker(QRunnable):
         super().__init__()
         self.orch = orch
         self._action = action
+        self._args = args
         self._kwargs = kwargs
         self._progress_callback = progress_callback
         self._control = control
@@ -53,7 +55,7 @@ class EngineWorker(QRunnable):
         """Invoke the orchestrator action and emit finished/error signals."""
         try:
             method = self._resolve_method()
-            result = method(**self._kwargs)
+            result = method(*self._args, **self._kwargs)
             self._emit(self.signals.finished, result)
         except Exception as e:  # noqa: BLE001 - forward any worker error to the UI
             # Log the full traceback first: the signal only carries the
@@ -195,3 +197,36 @@ class WorkerPool(QObject):
     @property
     def active_count(self) -> int:
         return len(self._active)
+
+
+def dispatch(
+    orch: Any,
+    action: str,
+    *args: Any,
+    on_result: Any = None,
+    on_error: Any = None,
+    progress_callback: Any = None,
+    control: Any = None,
+    **kwargs: Any,
+) -> EngineWorker:
+    """Run one orchestrator method on the worker pool.
+
+    Every GUI mutation and every long-running read goes through this single
+    entry point, so no call site can accidentally run engine I/O on the GUI
+    thread. The returned worker is kept alive by the pool until its signals
+    fire.
+    """
+    worker = EngineWorker(
+        orch,
+        action,
+        *args,
+        progress_callback=progress_callback,
+        control=control,
+        **kwargs,
+    )
+    if on_result is not None:
+        worker.signals.finished.connect(on_result)
+    if on_error is not None:
+        worker.signals.error.connect(on_error)
+    WorkerPool.instance().start(worker)
+    return worker

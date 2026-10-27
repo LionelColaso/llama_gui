@@ -9,8 +9,7 @@ the GUI and the CLI stay on the same code path.
 from __future__ import annotations
 
 from contextlib import suppress
-from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from PySide6.QtCore import Signal
@@ -25,13 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...download import resumable_tasks
 from ..download_actions import DownloadActionsMixin, add_list_footer
 from ..payload import as_payload
 from ..theme import COLORS
 from ..widgets.model_table import ModelTable
 from ..widgets.progress_bar import ProgressWidget, _human
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 
 def _ignore_error(msg: str) -> None:
@@ -116,16 +114,30 @@ class ModelsSection(DownloadActionsMixin, QWidget):
             self._offer_resume()
 
     def _offer_resume(self) -> None:
-        """Prompt to resume any model download left unfinished by a prior run."""
+        """Prompt to resume an interrupted model download on the worker pool.
+
+        Scanning the library for ``.part`` files used to run on the GUI thread,
+        blocking the first show of the Models tab; it is now one orchestrator
+        call, so the prompt is fired from its finished slot instead of inline.
+        """
         try:
-            models_dir = Path(self._orch.cfg.models_dir_path)
+            _models_dir = self._orch.cfg.models_dir_path
         except Exception:  # noqa: BLE001 - resume is best-effort, never fatal
             return
-        for task in resumable_tasks(models_dir):
-            url = task.get("url")
+        dispatch(
+            self._orch,
+            "resumable_model_downloads",
+            on_result=self._on_resume_tasks,
+        )
+
+    def _on_resume_tasks(self, tasks: Any) -> None:
+        """Ask about, and resume, any model download the scan found."""
+        for task in cast("list[dict[str, Any]]", tasks or []):
+            url: str | None = task.get("url")
             if not url:
                 continue
-            size = _human(task["total"]) if task.get("total") else "unknown size"
+            total = int(task.get("total") or 0)
+            size = _human(total) if total else "unknown size"
             answer = QMessageBox.question(
                 self,
                 "Resume download",
@@ -134,17 +146,19 @@ class ModelsSection(DownloadActionsMixin, QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 continue
             self._start_download_worker(
-                url, status_text=f"Resuming {url.rsplit('/', 1)[-1]}…"
+                url, status_text=f"Resuming {url.rsplit('/', 1)[-1]}�?�"
             )
             break
 
     # ─── Loading ─────────────────────────────────────────────────────────
 
     def _load(self) -> None:
-        worker = EngineWorker(self._orch, "list_models")
-        worker.signals.finished.connect(self._on_list)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "list_models",
+            on_result=self._on_list,
+            on_error=self._on_error,
+        )
 
     def _on_list(self, data: Any) -> None:
         payload = as_payload(data)
@@ -160,10 +174,12 @@ class ModelsSection(DownloadActionsMixin, QWidget):
             )
 
     def _show_server_path(self) -> None:
-        worker = EngineWorker(self._orch, "resolve")
-        worker.signals.finished.connect(self._on_resolve)
-        worker.signals.error.connect(_ignore_error)  # shown on the Backends section
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "resolve",
+            on_result=self._on_resolve,
+            on_error=_ignore_error,
+        )
 
     def _on_resolve(self, data: Any) -> None:
         with suppress(RuntimeError):
@@ -199,10 +215,13 @@ class ModelsSection(DownloadActionsMixin, QWidget):
             self._status_label.setText("Select a model in the list first.")
             return
         self._pending_active = name
-        worker = EngineWorker(self._orch, "set_active_model", name=name)
-        worker.signals.finished.connect(self._on_set_active_done)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "set_active_model",
+            name=name,
+            on_result=self._on_set_active_done,
+            on_error=self._on_error,
+        )
 
     def _on_set_active_done(self, data: Any) -> None:
         # Only report success once the worker has actually confirmed it.
@@ -224,10 +243,13 @@ class ModelsSection(DownloadActionsMixin, QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        worker = EngineWorker(self._orch, "remove_model", name=name)
-        worker.signals.finished.connect(self._on_list)
-        worker.signals.error.connect(self._on_error)
-        WorkerPool.instance().start(worker)
+        dispatch(
+            self._orch,
+            "remove_model",
+            name=name,
+            on_result=self._on_list,
+            on_error=self._on_error,
+        )
 
     def _do_server_options(self) -> None:
         """Ask for the selected model's server options."""

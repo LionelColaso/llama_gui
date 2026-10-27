@@ -35,8 +35,7 @@ def _record_workers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Route every worker the section starts into one list."""
     return record_workers(
         monkeypatch,
-        "app.gui.sections.models.WorkerPool",
-        "app.gui.download_actions.WorkerPool",
+        "app.gui.worker_pool.WorkerPool",
     )
 
 
@@ -186,9 +185,8 @@ class TestModelsSection:
     ) -> None:
         page = ModelsSection(fake_orch)
         qtbot.addWidget(page)
-        monkeypatch.setattr(
-            "app.gui.sections.models.resumable_tasks",
-            _resumable_without_url,
+        fake_orch.resumable_model_downloads.return_value = _resumable_without_url(
+            Path("/x")
         )
         asked: list[bool] = []
         _stub_resume_question(monkeypatch, asked)
@@ -196,7 +194,8 @@ class TestModelsSection:
 
         page._offer_resume()
 
-        assert asked == [] and started == []
+        assert asked == [] and len(started) == 1
+        assert started[0]._action == "resumable_model_downloads"
 
     def _resume_page(
         self,
@@ -208,9 +207,8 @@ class TestModelsSection:
         """A models page with one resumable task and a stubbed prompt."""
         page = ModelsSection(fake_orch)
         qtbot.addWidget(page)
-        monkeypatch.setattr(
-            "app.gui.sections.models.resumable_tasks",
-            _resumable_with_url,
+        fake_orch.resumable_model_downloads.return_value = _resumable_with_url(
+            Path("/x")
         )
         _stub_question(monkeypatch, answer)
         return page, _record_workers(monkeypatch)
@@ -225,8 +223,12 @@ class TestModelsSection:
         page._offer_resume()
 
         assert len(started) == 1
-        assert started[0]._action == "download_model"
-        assert started[0]._kwargs["url"] == "https://x/big.gguf"
+        assert started[0]._action == "resumable_model_downloads"
+        started[0].run_sync()
+
+        assert len(started) == 2
+        assert started[1]._action == "download_model"
+        assert started[1]._kwargs["url"] == "https://x/big.gguf"
         assert "Resuming big.gguf" in page._progress._bar.format()
 
     def test_offer_resume_does_nothing_on_no(
@@ -238,7 +240,11 @@ class TestModelsSection:
 
         page._offer_resume()
 
-        assert started == []
+        assert len(started) == 1
+        assert started[0]._action == "resumable_model_downloads"
+        # no download because answer was No
+        # Also ensure started only one worker
+        assert any(w._action == "download_model" for w in started) is False
 
     def test_offer_resume_is_best_effort(
         self, qtbot: QtBot, fake_orch: MagicMock

@@ -34,6 +34,9 @@ from .download import (
 from .download import (
     pending_downloads as _scan_pending_downloads,
 )
+from .download import (
+    resumable_tasks as _resumable_tasks,
+)
 from .lifecycle import (
     GLOBAL_ONLY_DEDICATED,
     build_llama_server_args,
@@ -686,6 +689,10 @@ class Orchestrator:
                 )
             ],
         )
+
+    def resumable_model_downloads(self) -> list[dict[str, Any]]:
+        """Interrupted model downloads under the models directory."""
+        return _resumable_tasks(self._models_dir())
 
     def discard_download(self, dest: str) -> PendingDownloadsData:
         """Delete an interrupted download's ``.part`` and meta, then re-list.

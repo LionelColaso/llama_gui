@@ -25,7 +25,7 @@ from tests.gui._pool_recorder import record_workers
 def _record_main_window_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[Any]:
-    return record_workers(monkeypatch, "app.gui.main_window.WorkerPool")
+    return record_workers(monkeypatch, "app.gui.worker_pool.WorkerPool")
 
 
 def test_main_window_creates(qtbot: QtBot, fake_orch: MagicMock) -> None:
@@ -295,9 +295,9 @@ def test_launch_on_start_fires_a_launch_worker(
         w = MainWindow(cfg)
         qtbot.addWidget(w)
 
-    assert len(started) == 1
-    assert started[0]._action == "launch"
-    assert started[0]._kwargs == {"verify": False}
+    launches = [w for w in started if w._action == "launch"]
+    assert len(launches) == 1
+    assert launches[0]._kwargs == {"verify": False}
 
 
 def test_start_minimized_hides_the_window(
@@ -320,8 +320,8 @@ def test_auto_update_starts_an_update_worker(
 
     w._auto_update()
 
-    assert len(started) == 1
-    assert started[0]._action == "update"
+    updates = [w for w in started if w._action == "update"]
+    assert len(updates) == 1
 
 
 def test_notify_update_without_a_tray_is_silent(

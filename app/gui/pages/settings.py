@@ -36,7 +36,7 @@ from ..theme import COLORS
 from ..token import delete_token, get_token, set_token
 from ..widgets.path_picker import PathPicker
 from ..widgets.progress_bar import ProgressWidget
-from ..worker_pool import EngineWorker, WorkerPool
+from ..worker_pool import dispatch
 
 _TOKEN_MASK = "*" * 8
 
@@ -390,13 +390,28 @@ class SettingsPage(QWidget):
             self._token_edit.setText(_TOKEN_MASK)
 
         settings = self.collect()
-        plan = self._orch.plan_relocation(
-            root=settings["root"], models_dir=settings["models_dir"]
+        self._pending_save = settings
+        self._status_label.setText("Checking the new locations…")
+        dispatch(
+            self._orch,
+            "plan_relocation",
+            root=settings["root"],
+            models_dir=settings["models_dir"],
+            on_result=self._on_plan_ready,
+            on_error=self._on_plan_failed,
         )
+
+    def _on_plan_ready(self, plan: Any) -> None:
+        settings = self._pending_save or {}
+        self._pending_save = None
         if plan.requires_choice:
             self._save_with_relocation(plan, settings)
             return
         self._persist(settings)
+
+    def _on_plan_failed(self, msg: str) -> None:
+        self._pending_save = None
+        self._status_label.setText(f"Could not check the new locations: {msg}")
 
     def _save_with_relocation(
         self, plan: RelocationData, settings: dict[str, Any]
@@ -421,7 +436,7 @@ class SettingsPage(QWidget):
         self._pending_save = settings
         verb = "Copying" if transfer == RelocateDialog.COPY else "Moving"
         self._progress.start_operation(f"{verb}…")
-        worker = EngineWorker(
+        dispatch(
             self._orch,
             "relocate_data",
             progress_callback=self._on_relocate_progress,
@@ -430,10 +445,9 @@ class SettingsPage(QWidget):
             transfer=transfer,
             move_backends=dialog.move_backends(),
             move_models=dialog.move_models(),
+            on_result=self._on_relocated,
+            on_error=self._on_relocate_failed,
         )
-        worker.signals.finished.connect(self._on_relocated)
-        worker.signals.error.connect(self._on_relocate_failed)
-        WorkerPool.instance().start(worker)
 
     def _on_relocate_progress(
         self, done: int, total: int, phase: str, overall: float | None = None
@@ -463,46 +477,66 @@ class SettingsPage(QWidget):
         )
 
     def _persist(self, settings: dict[str, Any]) -> None:
-        self._orch.save_config(settings)
-        self._load()
-        self._status_label.setText(f"Saved to {self._config_file()}")
+        def _saved(_data: Any) -> None:
+            self._load()
+            self._status_label.setText(f"Saved to {self._config_file()}")
+
+        dispatch(
+            self._orch,
+            "save_config",
+            settings,
+            on_result=_saved,
+            on_error=self._on_settings_save_failed,
+        )
+
+    def _on_settings_save_failed(self, msg: str) -> None:
+        self._status_label.setText(f"Could not save the settings: {msg}")
 
     def _validate(self) -> None:
         """Run the resolver so the user sees exactly which binaries would run."""
-        try:
-            resolved = self._orch.resolve()
-        except Exception as exc:  # noqa: BLE001 - surfaced in the UI
-            self._status_label.setText(f"Validation failed: {exc}")
-            return
-        data = as_payload(resolved)
-        self._status_label.setText(
-            _format_resolution("llama-server", data.get("llama_server", {}))
+        self._status_label.setText("Checking…")
+        dispatch(
+            self._orch,
+            "resolve",
+            on_result=self._on_validated,
+            on_error=self._on_validate_failed,
         )
+
+    def _on_validated(self, data: Any) -> None:
+        payload = as_payload(data)
+        self._status_label.setText(
+            _format_resolution("llama-server", payload.get("llama_server", {}))
+        )
+
+    def _on_validate_failed(self, msg: str) -> None:
+        self._status_label.setText(f"Validation failed: {msg}")
 
     def _use_default_root(self, _current: str) -> None:
         """Drop the root override so the app follows the platform default."""
-        self._use_default("root", self._orch.reset_root)
+        self._use_default("root", "reset_root")
 
     def _use_default_models_dir(self, _current: str) -> None:
         """Drop the models directory override (back to ``<root>/models``)."""
-        self._use_default("models directory", self._orch.reset_models_dir)
+        self._use_default("models directory", "reset_models_dir")
 
-    def _use_default(self, label: str, reset: Any) -> None:
+    def _use_default(self, label: str, action: str) -> None:
         """Run a "Use Default" reset and report the resulting location.
 
         The override is removed from the config file rather than written as the
         resolved path, so the setting keeps tracking the default instead of
         being pinned to today's value.
         """
-        try:
-            data = reset()
-        except Exception as exc:  # noqa: BLE001 - surfaced in the UI
-            self._status_label.setText(f"Could not reset the {label}: {exc}")
-            return
-        self._load()
-        self._status_label.setText(
-            data.warnings[-1] if data.warnings else f"{label} set to its default."
-        )
+
+        def _reset_done(data: Any) -> None:
+            self._load()
+            self._status_label.setText(
+                data.warnings[-1] if data.warnings else f"{label} set to its default."
+            )
+
+        def _reset_failed(msg: str) -> None:
+            self._status_label.setText(f"Could not reset the {label}: {msg}")
+
+        dispatch(self._orch, action, on_result=_reset_done, on_error=_reset_failed)
 
     def _clear_token(self) -> None:
         delete_token()
